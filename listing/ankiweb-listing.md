@@ -1,10 +1,11 @@
 # AnkiWeb listing for Backdrop Video (Beta)
 
-Upload: `dist/backdrop_video-ankiweb.ankiaddon` (not `backdrop_video.ankiaddon`)
+- **AnkiWeb:** `https://ankiweb.net/shared/info/112379335` (code `112379335`)
+- **Upload:** `dist/backdrop_video-ankiweb.ankiaddon` (not `backdrop_video.ankiaddon`)
 
 ## Title
 
-Backdrop Video: a soft video behind your cards
+Backdrop Video: Brain Rot Add On
 
 ## Tags
 
