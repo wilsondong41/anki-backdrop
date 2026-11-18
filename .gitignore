@@ -1,0 +1,11 @@
+backups/
+dist/
+user_files/
+backdrop_video/user_files/
+.claude/
+AGENTS.md
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+meta.json
