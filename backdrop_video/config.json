@@ -1,12 +1,19 @@
 {
     "url": "",
+    "urls": [],
+    "muted": [],
     "on": false,
     "strength": 30,
+    "plate_opacity": 70,
+    "true_transparency": false,
     "volume": 50,
     "paused": false,
     "picture": true,
     "panel": false,
     "quality": "auto",
+    "multi_fps": "auto",
+    "suppress_ytdlp_prompt": false,
     "title": "",
-    "recent": []
+    "recent": [],
+    "folders": []
 }

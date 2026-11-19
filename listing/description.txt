@@ -1,34 +1,37 @@
 **Play a soft, blurred video or live stream behind your Anki cards while you study** — instead of covering your card text with a picture-in-picture window.
 
-<img src="https://i.imgur.com/CY0QPhw.png" width="640" alt="Frosted-glass card floating over a blurred backdrop">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/ca0984b00eb9363d88203d384c2df81231bfba44/listing/1-card-backdrop.png" width="640" alt="Frosted-glass Anki question card floating over a split lo-fi and subway-runner blurred backdrop">
 
 ## What it does
 
-- **Frosted-glass card over video.** Your card sits on a centered, translucent frosted-glass plate so text stays easy to read while the video glows softly behind and around it. Works with stock Anki as well as theme and UI add-ons like Onigiri, Synapse, AMBOSS, and AnKing card templates.
-- **Quick controls while studying.** A small tab on the right edge opens a compact panel that never steals keyboard focus from Space or 1–4:
-  - Play / Pause, Hide picture (keep sound), Turn on / off
-  - **Position** scrub bar for regular videos (automatically hidden for live streams)
-  - **Backdrop** strength slider (from soft blur to clear) and **Volume** slider
-  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`) for live streams
-  - Paste a link or one-click play your copied link or recent videos
-- **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card.
+- **Frosted-glass card over video.** Your card sits on a centered, translucent frosted-glass plate with its own **Study card** translucency slider—plus a **True transparency** toggle if you also want the frosted blur and border to fade away as you slide down. Works with stock Anki as well as theme and UI add-ons like Onigiri, Synapse, AMBOSS, and AnKing card templates.
+- **Multi-view (1–4 videos or streams at once).** Stack up to 4 videos or live streams behind your cards (2 split evenly, 3 arranged 2-on-top + 1-on-bottom, 4 in a 2×2 grid) without cropping landscape, vertical, or resized windows. Mute, save, or remove individual streams anytime.
+- **Saved folders & multi-select.** Organize favorite videos or streams into compact folder pills right in the sidebar (`★` on any playing, recent, or browsed page). Use **Select** to pick up to 4 saved items across folders and launch them together in multi-view.
+- **Quick controls while studying.** A small tab on the right edge opens a compact panel that auto-minimizes when you click back to study and never steals keyboard focus from Space or 1–4:
+  - Play / Pause, Hide picture (keep sound), **Break zone**, Turn on / off
+  - **Per-video timestamp & `-10s` / `+10s` skip:** Click any non-live video's title in **Now Playing** (even with 2–4 videos playing at once) to open `-10s` / `+10s` skip buttons and a scrub slider for just that video, then click `↩` to return to `★` / Mute / `×`. Works for YouTube **and other sites' videos** too, and each video picks up where you left it
+  - **Backdrop** blur/opacity, **Study card** translucency (+ **True transparency**), and **Volume** sliders
+  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) and **Frame rate** (`Auto`, `15`, `24`, `30`, `45`, `Source`; hover any option for what it's good for) with a live FPS readout. Lower frame rates save CPU and battery, and the blur hides the difference
+  - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links (with `+` to play alongside), or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
+- **Break zone.** Take a breather cleanly without inflating your Anki card timing or breaking Pomodoro timers (compatible with Pomodoro Bar and other Pomodoro add-ons) while watching your video/stream clearly with a live break/rest countdown.
+- **Live now dots.** Saved and recent streams (Twitch, Kick, YouTube Live, cam and chat rooms, and other `yt-dlp` sites) show a green dot when they're live and a red one when they're offline, and folder buttons show how many are live. Checked lightly, only while the panel is open, and remembered for a few minutes.
+- **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card. Works on every site, and stays clear if a new card appears mid-peek.
 - **Auto-ducks for audio.** Automatically turns the backdrop down to 1/4 volume while Anki card audio, `{{tts}}`, or the Read Aloud add-on is speaking, then brings it back up.
-- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, direct `.webm`/`.mp4` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free).
+- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Frame rate is automatic (`30–60 fps` depending on your computer and stream count) unless you pick one.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 
-<img src="https://i.imgur.com/9hLfxl1.png" width="640" alt="Right-edge quick controls panel with position, strength, volume and stream quality">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/50c263757dd34357692e45838ebefeffa1a7274f/listing/4-panel-time-and-fps.png" width="300" alt="Controls tab: three videos in Now Playing, one with -10s/+10s and a position slider open, Display & Sound sliders, Stream Quality and Frame rate pills"> <img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/50c263757dd34357692e45838ebefeffa1a7274f/listing/5-panel-live-dots.png" width="300" alt="Library tab: Saved folder button and Lofi Girl with green live-now dots, Recent list">
 
 ## Getting started
 
-1. Open **Tools → Backdrop Video…** (or press **Ctrl+Shift+B** / **Cmd+Shift+B**).
-2. Paste a YouTube, Twitch, or video link and click **Play**.
-3. Use the small film-strip tab on the right edge while studying to adjust blur, volume, position, or switch recent videos.
+1. Open **Tools → Backdrop Video…** (or press **Ctrl+Shift+B** / **Cmd+Shift+B**) to browse/pre-find videos, organize your **Saved Folders**, adjust display settings, or install/update the optional `yt-dlp` live-stream helper.
+2. Or click the small film-strip tab on the right edge while studying to paste a link, browse, save into folders, adjust blur/transparency/volume, or add streams alongside what's playing.
 
-<img src="https://i.imgur.com/NYsV5RX.png" width="520" alt="Tools → Backdrop Video… dialog">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/ca0984b00eb9363d88203d384c2df81231bfba44/listing/3-settings-dialog.png" width="640" alt="Tools → Backdrop Video… dialog with Saved Folders & Browse organizer, Display & Live Streams sliders, True transparency, and Download yt-dlp Helper button">
 
 ## Good to know
 
-- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. The first time you play a live stream, Backdrop Video offers a one-click download of the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates) and uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory. Regular YouTube videos need no extra download.
+- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. When a live or incompatible stream needs the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates), Backdrop Video prompts you (with a **Don't show this again** option) and also lets you download/update it anytime in **Tools → Backdrop Video…**. It uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory; regular YouTube videos need no extra download.
 - **Software rendering:** If Anki is set to software video rendering, blur is turned off automatically to keep CPU usage low.
 - **Requires internet:** Videos stream live over your connection and aren't downloaded offline.
 
