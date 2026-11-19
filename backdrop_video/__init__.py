@@ -36,6 +36,14 @@ VALID_QUALITIES = {v for _, v in QUALITIES}
 # Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
 FPS_CHOICES = [("Auto", "auto"), ("15", "15"), ("24", "24"), ("30", "30"), ("45", "45"), ("Source", "0")]
 VALID_FPS = {v for _, v in FPS_CHOICES}
+FPS_HELP = {  # hover text for each choice (same words as the sidebar)
+    "auto": "Picks 30–60 fps for you, based on your computer and how many videos are playing",
+    "15": "Lowest that still looks like smooth motion. Saves the most CPU and battery; the blur hides the difference",
+    "24": "Film rate. Most movies and many online videos are 24, so nothing is dropped",
+    "30": "The usual rate for web videos and most live streams (Twitch, cam sites)",
+    "45": "A middle step for 60 fps streams on slower computers",
+    "0": "The stream's own frame rate, no limit (60 fps streams stay 60). Uses the most CPU",
+}
 
 
 def _fps_choice(c: dict) -> str:
@@ -1152,6 +1160,7 @@ class BackdropDialog(QDialog):
         self.fps = QComboBox()
         for label, value in FPS_CHOICES:
             self.fps.addItem(label if value in ("auto", "0") else f"{label} fps", value)
+            self.fps.setItemData(self.fps.count() - 1, FPS_HELP[value], Qt.ItemDataRole.ToolTipRole)
         self.fps.setCurrentIndex(max(0, self.fps.findData(_fps_choice(c))))
         self.fps.setToolTip("Frame rate for live streams and other converted videos. Lower uses less CPU and battery.")
         self.fps.currentIndexChanged.connect(lambda _i: set_fps(self.fps.currentData()))

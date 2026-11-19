@@ -651,8 +651,9 @@ fps_res = _rt_exec("""(() => {
   const tops = new Set(pills.map((p) => Math.round(p.getBoundingClientRect().top)));
   pills.find((p) => p.dataset.fps === "24").click();
   const after = [...document.querySelectorAll("#bd-panel .bd-pill[data-fps].bd-active")].map((p) => p.dataset.fps);
-  return {n: pills.length, before, after, rows: tops.size, sent: window._sent.filter((m) => m.startsWith("backdrop:set:"))};
+  return {n: pills.length, before, after, titled: pills.every((p) => p.title.length > 20), rows: tops.size, sent: window._sent.filter((m) => m.startsWith("backdrop:set:"))};
 })()""")
+assert fps_res["titled"] is True, fps_res
 assert fps_res["n"] == 6 and fps_res["before"] == ["30"] and fps_res["after"] == ["24"], fps_res
 assert fps_res["sent"] == ['backdrop:set:{"fps":"24"}'], fps_res
 

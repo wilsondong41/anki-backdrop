@@ -552,12 +552,12 @@ window.backdrop = (() => {
             </div>
             <div class="bd-sub-label" title="Lower uses less CPU and battery; the backdrop is blurred, so 24 or 30 usually looks the same.">Frame rate</div>
             <div class="bd-pills" role="group" aria-label="Frame rate">
-              <button type="button" class="bd-pill" data-fps="auto">Auto</button>
-              <button type="button" class="bd-pill" data-fps="15">15</button>
-              <button type="button" class="bd-pill" data-fps="24">24</button>
-              <button type="button" class="bd-pill" data-fps="30">30</button>
-              <button type="button" class="bd-pill" data-fps="45">45</button>
-              <button type="button" class="bd-pill" data-fps="0" title="The stream's own frame rate">Source</button>
+              <button type="button" class="bd-pill" data-fps="auto" title="Picks 30–60 fps for you, based on your computer and how many videos are playing">Auto</button>
+              <button type="button" class="bd-pill" data-fps="15" title="Lowest that still looks like smooth motion. Saves the most CPU and battery; the blur hides the difference">15</button>
+              <button type="button" class="bd-pill" data-fps="24" title="Film rate. Most movies and many online videos are 24, so nothing is dropped">24</button>
+              <button type="button" class="bd-pill" data-fps="30" title="The usual rate for web videos and most live streams (Twitch, cam sites)">30</button>
+              <button type="button" class="bd-pill" data-fps="45" title="A middle step for 60 fps streams on slower computers">45</button>
+              <button type="button" class="bd-pill" data-fps="0" title="The stream's own frame rate, no limit (60 fps streams stay 60). Uses the most CPU">Source</button>
             </div>
           </div>
         </div>
