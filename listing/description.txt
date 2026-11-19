@@ -9,17 +9,18 @@
 - **Saved folders & multi-select.** Organize favorite videos or streams into compact folder pills right in the sidebar (`★` on any playing, recent, or browsed page). Use **Select** to pick up to 4 saved items across folders and launch them together in multi-view.
 - **Quick controls while studying.** A small tab on the right edge opens a compact panel that auto-minimizes when you click back to study and never steals keyboard focus from Space or 1–4:
   - Play / Pause, Hide picture (keep sound), **Break zone**, Turn on / off
-  - **Per-video timestamp & `-10s` / `+10s` skip:** Click any non-live video's title in **Now Playing** (even with 2–4 videos playing at once) to open persistent `-10s` / `+10s` skip buttons and a scrub slider for that video, then click `↩` anytime to return to `★` / Mute / `×`
+  - **Per-video timestamp & `-10s` / `+10s` skip:** Click any non-live video's title in **Now Playing** (even with 2–4 videos playing at once) to open `-10s` / `+10s` skip buttons and a scrub slider for just that video, then click `↩` to return to `★` / Mute / `×`. Works for YouTube **and other sites' videos** too, and each video picks up where you left it
   - **Backdrop** blur/opacity, **Study card** translucency (+ **True transparency**), and **Volume** sliders
-  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) with live FPS readout
+  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) and **Frame rate** (`Auto`, `15`, `24`, `30`, `45`, `Source`; hover any option for what it's good for) with a live FPS readout. Lower frame rates save CPU and battery, and the blur hides the difference
   - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links (with `+` to play alongside), or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
 - **Break zone.** Take a breather cleanly without inflating your Anki card timing or breaking Pomodoro timers (compatible with Pomodoro Bar and other Pomodoro add-ons) while watching your video/stream clearly with a live break/rest countdown.
-- **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card.
+- **Live now dots.** Saved and recent streams (Twitch, Kick, YouTube Live, cam and chat rooms, and other `yt-dlp` sites) show a green dot when they're live and a red one when they're offline, and folder buttons show how many are live. Checked lightly, only while the panel is open, and remembered for a few minutes.
+- **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card. Works on every site, and stays clear if a new card appears mid-peek.
 - **Auto-ducks for audio.** Automatically turns the backdrop down to 1/4 volume while Anki card audio, `{{tts}}`, or the Read Aloud add-on is speaking, then brings it back up.
-- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Adaptive `30–60 fps` (or set `multi_fps` in add-on config) keeps multi-stream CPU usage low.
+- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Frame rate is automatic (`30–60 fps` depending on your computer and stream count) unless you pick one.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 
-<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/ca0984b00eb9363d88203d384c2df81231bfba44/listing/2-quick-panel.png" width="640" alt="Right-edge Controls/Library sidebar with labeled quick actions, Now Playing mute/save/remove, Display & Sound sliders with True transparency, and Stream Quality with live FPS">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/50c263757dd34357692e45838ebefeffa1a7274f/listing/4-panel-time-and-fps.png" width="300" alt="Controls tab: three videos in Now Playing, one with -10s/+10s and a position slider open, Display & Sound sliders, Stream Quality and Frame rate pills"> <img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/50c263757dd34357692e45838ebefeffa1a7274f/listing/5-panel-live-dots.png" width="300" alt="Library tab: Saved folder button and Lofi Girl with green live-now dots, Recent list">
 
 ## Getting started
 
