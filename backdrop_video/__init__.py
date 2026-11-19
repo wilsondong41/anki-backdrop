@@ -926,7 +926,7 @@ class BackdropDialog(QDialog):
         c = conf()
 
         # ---- Left: Browse & Saved Folder Organizer ----
-        lib_box = QGroupBox("Saved Folders & Browse")
+        lib_box = QGroupBox("Saved Folders && Browse")
         lib_lay = QVBoxLayout(lib_box)
 
         self.browse_btn = QPushButton("Browse / Pre-find Videos…")
@@ -993,7 +993,7 @@ class BackdropDialog(QDialog):
         lib_lay.addLayout(item_bar)
 
         # ---- Right: Display, Quality & Live Stream Helper ----
-        set_box = QGroupBox("Display & Live Streams")
+        set_box = QGroupBox("Display && Live Streams")
         set_lay = QVBoxLayout(set_box)
 
         self.strength = self.slider(c["strength"], lambda v: self.live(strength=v))

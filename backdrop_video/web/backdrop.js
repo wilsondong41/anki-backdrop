@@ -3,7 +3,7 @@
 window.backdrop = (() => {
   const root = document.documentElement;
   let cfg = null, layer = null, slots = [], time = 0, duration = 0, seeking = false, timer = null, fpsTimer = null, panel = null, breakPill = null;
-  let openFolder = null, selectMode = false, savingItem = null, addingFolder = false, confirmDeleteFolder = null;
+  let openFolder = null, selectMode = false, savingItem = null, addingFolder = false, confirmDeleteFolder = null, activeTab = null;
   const selectedUrls = new Set();
   const ducking = new Set();  // what is talking now: card audio, Read Aloud
   const send = (msg) => { if (typeof pycmd === "function") pycmd(msg); };
@@ -376,7 +376,8 @@ window.backdrop = (() => {
 
   function updateHint() {
     const hintEl = panel && panel.querySelector(".bd-hint");
-    if (!hintEl || !cfg) return;
+    const qBadge = panel && panel.querySelector(".bd-q-badge");
+    if (!cfg) return;
     let note = cfg.auto_note || "";
     const vals = Array.from(new Set(
       slots.map((s) => s.measuredFps || s.fps).filter((f) => typeof f === "number" && f > 0)
@@ -386,7 +387,11 @@ window.backdrop = (() => {
       const base = note.replace(/,\s*(?:up to\s+)?(?:\d+(?:[–-]\d+)?|uncapped|source)\s*fps$/i, "");
       note = `${base}, ${fpsLabel}`;
     }
-    hintEl.textContent = note ? `Hold P to peek · ${note}` : "Hold P to peek";
+    if (qBadge) {
+      const m = /(?:up to\s+)?\d+(?:[–-]\d+)?\s*fps|uncapped\s*fps/i.exec(note);
+      qBadge.textContent = m ? m[0] : "";
+    }
+    if (hintEl) hintEl.textContent = note ? `Hold P to peek · ${note}` : "Hold P to peek";
   }
 
   // ---- Quick controls -------------------------------------------------------------------------
@@ -400,6 +405,8 @@ window.backdrop = (() => {
     power: '<path d="M12 3v9 M6.3 7.3a8 8 0 1 0 11.4 0"/>',
     coffee: '<path d="M17 8h1a4 4 0 0 1 0 8h-1 M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z M6 2v3 M10 2v3 M14 2v3"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+    volOn: '<path d="M11 5L6 9H2v6h4l5 4V5z M15.5 8.5a5 5 0 0 1 0 7 M18.5 5.5a9 9 0 0 1 0 13"/>',
+    volOff: '<path d="M11 5L6 9H2v6h4l5 4V5z M22 9l-6 6 M16 9l6 6"/>',
     close: '<path d="M9 6l6 6-6 6"/>',
   };
   const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
@@ -421,45 +428,70 @@ window.backdrop = (() => {
     panel.innerHTML = `
       <button class="bd-tab" data-act="toggle" aria-label="Show backdrop video controls" title="Backdrop video">${svg("film")}</button>
       <div class="bd-box" role="region" aria-label="Backdrop video">
-        <div class="bd-head"><span>Backdrop video</span>
-          <button class="bd-icon" data-act="toggle" aria-label="Hide controls" title="Hide">${svg("close")}</button></div>
-        <div class="bd-now"></div>
+        <div class="bd-head">
+          <div class="bd-head-title"><span>Backdrop Video</span><span class="bd-now"></span></div>
+          <button class="bd-icon" data-act="toggle" aria-label="Hide controls" title="Hide">${svg("close")}</button>
+        </div>
         <div class="bd-buttons">
           <button class="bd-icon" data-act="pause"></button>
           <button class="bd-icon" data-act="picture"></button>
           <button class="bd-icon" data-act="break"></button>
           <button class="bd-icon" data-act="power"></button>
         </div>
-        <label class="bd-slider bd-seek" hidden><span class="bd-seek-head"><span>Position</span><span class="bd-seek-time">0:00 / 0:00</span></span><input type="range" min="0" max="100" value="0" data-key="seek"></label>
-        <label class="bd-slider"><span>Backdrop</span><input type="range" min="0" max="100" data-key="strength"></label>
-        <label class="bd-slider"><span>Study card</span><input type="range" min="0" max="100" data-key="plate_opacity"></label>
-        <label class="bd-check" title="Also fade card blur and border as you slide Study card down">
-          <input type="checkbox" data-key="true_transparency"><span>True transparency</span>
-        </label>
-        <label class="bd-slider"><span>Volume</span><input type="range" min="0" max="100" data-key="volume"></label>
-        <div class="bd-quality" title="Applies to live streams (Twitch, YouTube Live, etc.). Regular YouTube videos adjust automatically.">
-          <span>Stream quality</span>
-          <div class="bd-pills" role="group" aria-label="Stream quality">
-            <button type="button" class="bd-pill" data-quality="auto">Auto</button>
-            <button type="button" class="bd-pill" data-quality="360">360</button>
-            <button type="button" class="bd-pill" data-quality="480">480</button>
-            <button type="button" class="bd-pill" data-quality="720">720</button>
-            <button type="button" class="bd-pill" data-quality="1080">1080</button>
-            <button type="button" class="bd-pill" data-quality="1440">1440</button>
-            <button type="button" class="bd-pill" data-quality="2160">4K</button>
+        <div class="bd-nav" role="tablist" aria-label="Backdrop sections">
+          <button type="button" class="bd-nav-btn" role="tab" data-act="switch-tab" data-tab="controls">Controls</button>
+          <button type="button" class="bd-nav-btn" role="tab" data-act="switch-tab" data-tab="library">Library</button>
+        </div>
+        <div class="bd-save-pop" hidden></div>
+        <div class="bd-pane" data-pane="controls">
+          <div class="bd-card bd-slots-card">
+            <div class="bd-card-head">
+              <span class="bd-label bd-slots-title">Now Playing</span>
+              <button type="button" class="bd-sec-btn" data-act="browse" title="Find or add another video">+ Browse</button>
+            </div>
+            <div class="bd-slots"></div>
+            <div class="bd-empty-play" hidden>
+              <span>No video playing yet.</span>
+              <button type="button" class="bd-primary-btn" data-act="browse">${svg("search")}<span>Browse Videos</span></button>
+            </div>
+            <label class="bd-slider bd-seek" hidden><span class="bd-seek-head"><span>Position</span><span class="bd-seek-time">0:00 / 0:00</span></span><input type="range" min="0" max="100" value="0" data-key="seek"></label>
+          </div>
+          <div class="bd-card">
+            <div class="bd-card-head"><span class="bd-label">Display &amp; Sound</span></div>
+            <label class="bd-slider"><span class="bd-slider-head"><span>Backdrop</span><span class="bd-val" data-val="strength"></span></span><input type="range" min="0" max="100" data-key="strength"></label>
+            <label class="bd-slider"><span class="bd-slider-head"><span>Study card</span><span class="bd-val" data-val="plate_opacity"></span></span><input type="range" min="0" max="100" data-key="plate_opacity"></label>
+            <label class="bd-check" title="Also fade card blur and border as you slide Study card down">
+              <input type="checkbox" data-key="true_transparency"><span>True transparency</span>
+            </label>
+            <label class="bd-slider"><span class="bd-slider-head"><span>Volume</span><span class="bd-val" data-val="volume"></span></span><input type="range" min="0" max="100" data-key="volume"></label>
+          </div>
+          <div class="bd-card bd-quality" title="Applies to live streams (Twitch, YouTube Live, etc.). Regular YouTube videos adjust automatically.">
+            <div class="bd-card-head"><span class="bd-label">Stream Quality</span><span class="bd-q-badge"></span></div>
+            <div class="bd-pills" role="group" aria-label="Stream quality">
+              <button type="button" class="bd-pill" data-quality="auto">Auto</button>
+              <button type="button" class="bd-pill" data-quality="360">360</button>
+              <button type="button" class="bd-pill" data-quality="480">480</button>
+              <button type="button" class="bd-pill" data-quality="720">720</button>
+              <button type="button" class="bd-pill" data-quality="1080">1080</button>
+              <button type="button" class="bd-pill" data-quality="1440">1440</button>
+              <button type="button" class="bd-pill" data-quality="2160">4K</button>
+            </div>
           </div>
         </div>
-        <button class="bd-offer" data-act="offer" hidden></button>
-        <form class="bd-link">
-          <input type="text" placeholder="Paste a link" aria-label="Video link" spellcheck="false">
-          <button type="submit">Play</button>
-          <button type="button" class="bd-add" data-act="add" title="Add alongside current video (up to 4)" hidden>+</button>
-          <button type="button" class="bd-browse" data-act="browse" aria-label="Browse or search for a video" title="Search / Browse in Anki">${svg("search")}</button>
-        </form>
-        <div class="bd-slots"></div>
-        <div class="bd-save-pop" hidden></div>
-        <div class="bd-folders"></div>
-        <div class="bd-recent"></div>
+        <div class="bd-pane" data-pane="library">
+          <div class="bd-card">
+            <div class="bd-card-head"><span class="bd-label">Add a Video</span></div>
+            <button type="button" class="bd-primary-btn bd-browse-full" data-act="browse" aria-label="Browse or search for a video" title="Search / Browse in Anki">${svg("search")}<span>Browse / Search Videos</span></button>
+            <button class="bd-offer" data-act="offer" hidden></button>
+            <form class="bd-link">
+              <input type="text" placeholder="Paste a link…" aria-label="Video link" spellcheck="false">
+              <button type="submit">Play</button>
+              <button type="button" class="bd-add" data-act="add" title="Add alongside current video (up to 4)" hidden>+</button>
+            </form>
+          </div>
+          <div class="bd-card bd-folders"></div>
+          <div class="bd-card bd-recent"></div>
+        </div>
         <div class="bd-hint">Hold P to peek</div>
       </div>`;
     root.appendChild(panel);
@@ -471,6 +503,11 @@ window.backdrop = (() => {
       const el = e.target.closest("[data-act], [data-url], [data-quality]");
       if (!el) return;
       const act = el.dataset.act;
+      if (act === "switch-tab") {
+        activeTab = el.dataset.tab === "library" ? "library" : "controls";
+        update(true);
+        return;
+      }
       if (act === "mute-slot") {
         const u = el.dataset.slotUrl;
         const cur = new Set(cfg.muted || []);
@@ -635,6 +672,8 @@ window.backdrop = (() => {
           return;
         }
         cfg[key] = +range.value;
+        const valEl = panel.querySelector(`[data-val="${key}"]`);
+        if (valEl) valEl.textContent = cfg[key] + "%";
         if (key === "strength" || key === "plate_opacity") style(cfg.strength);
         else setVolume(cfg.volume);
       });
@@ -841,6 +880,11 @@ window.backdrop = (() => {
         pills.appendChild(p);
       }
       box.appendChild(pills);
+    } else if (!addingFolder) {
+      const emptyHint = document.createElement("div");
+      emptyHint.className = "bd-folder-empty";
+      emptyHint.textContent = "Click ★ on any video or + above to organize folders.";
+      box.appendChild(emptyHint);
     }
 
     if (selectMode) {
@@ -930,9 +974,9 @@ window.backdrop = (() => {
     box.appendChild(body);
   }
 
-  function button(act, icon, label, disabled) {
+  function button(act, icon, shortText, label, disabled) {
     const b = panel.querySelector(`[data-act=${act}]`);
-    b.innerHTML = svg(icon);
+    b.innerHTML = `${svg(icon)}<span class="bd-act-lbl">${shortText}</span>`;
     b.title = label;
     b.setAttribute("aria-label", label);
     b.disabled = !!disabled;
@@ -945,22 +989,36 @@ window.backdrop = (() => {
     if (!cfg.on) {
       nowEl.textContent = "Off";
     } else if (slots.length > 1) {
-      nowEl.textContent = (cfg.paused ? "Paused · " : "") + slots.length + " streams playing";
+      nowEl.textContent = (cfg.paused ? "Paused · " : "") + slots.length + " playing";
     } else {
       const s0 = slots[0];
       nowEl.textContent = cfg.paused ? "Paused" : (s0 && s0.live ? "Live" : "Playing");
     }
-    button("pause", cfg.paused ? "play" : "pause", cfg.paused ? "Play" : "Pause", !cfg.on);
-    button("picture", cfg.picture === false ? "eyeOff" : "eye", cfg.picture === false ? "Show picture" : "Hide picture (keep sound)", !cfg.on);
+    nowEl.classList.toggle("bd-live", !!(cfg.on && !cfg.paused));
+    button("pause", cfg.paused ? "play" : "pause", cfg.paused ? "Play" : "Pause", cfg.paused ? "Play" : "Pause", !cfg.on);
+    button("picture", cfg.picture === false ? "eyeOff" : "eye", cfg.picture === false ? "Show" : "Hide", cfg.picture === false ? "Show picture" : "Hide picture (keep sound)", !cfg.on);
     const onBreak = !!(cfg.break_info && cfg.break_info.active);
-    button("break", "coffee", onBreak ? "Exit break zone" : "Break zone (pauses timers, watch clearly)", !onBreak && !cfg.on && !cfg.url);
+    button("break", "coffee", "Break", onBreak ? "Exit break zone" : "Break zone (pauses timers, watch clearly)", !onBreak && !cfg.on && !cfg.url);
     panel.querySelector(".bd-buttons [data-act=break]").classList.toggle("bd-active", onBreak);
-    button("power", "power", cfg.on ? "Turn off" : "Turn on", !cfg.on && !cfg.url);
+    button("power", "power", cfg.on ? "Off" : "On", cfg.on ? "Turn off" : "Turn on", !cfg.on && !cfg.url);
     panel.querySelector(".bd-buttons [data-act=power]").classList.toggle("bd-active", !!cfg.on);
+
+    const tab = activeTab || (cfg.on ? "controls" : "library");
+    for (const tb of panel.querySelectorAll(".bd-nav-btn")) {
+      const isAct = tb.dataset.tab === tab;
+      tb.classList.toggle("bd-active", isAct);
+      tb.setAttribute("aria-selected", isAct ? "true" : "false");
+    }
+    for (const pane of panel.querySelectorAll(".bd-pane")) {
+      pane.hidden = pane.dataset.pane !== tab;
+    }
+
     const addBtn = panel.querySelector("[data-act=add]");
     if (addBtn) addBtn.hidden = !(cfg.on && slots.length >= 1 && slots.length < 4);
     for (const range of panel.querySelectorAll("input[type=range]")) {
       if (range.dataset.key !== "seek" && document.activeElement !== range) range.value = cfg[range.dataset.key];
+      const valEl = panel.querySelector(`[data-val="${range.dataset.key}"]`);
+      if (valEl && typeof cfg[range.dataset.key] === "number") valEl.textContent = cfg[range.dataset.key] + "%";
     }
     const tt = panel.querySelector("input[data-key=true_transparency]");
     if (tt) tt.checked = !!cfg.true_transparency;
@@ -972,6 +1030,12 @@ window.backdrop = (() => {
       pill.setAttribute("aria-pressed", active ? "true" : "false");
     }
     updateHint();
+    const slotsTitle = panel.querySelector(".bd-slots-title");
+    if (slotsTitle) slotsTitle.textContent = cfg.on && slots.length ? `Now Playing (${slots.length}/4)` : "Now Playing";
+    const slotsAddBtn = panel.querySelector(".bd-slots-card .bd-sec-btn");
+    if (slotsAddBtn) slotsAddBtn.hidden = !(cfg.on && slots.length < 4);
+    const emptyPlay = panel.querySelector(".bd-empty-play");
+    if (emptyPlay) emptyPlay.hidden = !!(cfg.on && slots.length >= 1);
     const slotsBox = panel.querySelector(".bd-slots");
     slotsBox.textContent = "";
     if (cfg.on && slots.length >= 1) {
@@ -992,10 +1056,13 @@ window.backdrop = (() => {
         starBtn.textContent = "★";
         const muteBtn = document.createElement("button");
         muteBtn.type = "button";
-        muteBtn.className = "bd-slot-btn" + (isMuted(s.url) ? " bd-muted" : "");
+        const muted = isMuted(s.url);
+        muteBtn.className = "bd-slot-btn bd-slot-ico" + (muted ? " bd-muted" : "");
         muteBtn.dataset.act = "mute-slot";
         muteBtn.dataset.slotUrl = s.url;
-        muteBtn.textContent = isMuted(s.url) ? "Muted" : "Mute";
+        muteBtn.title = muted ? "Unmute stream" : "Mute stream";
+        muteBtn.setAttribute("aria-label", muted ? "Unmute stream" : "Mute stream");
+        muteBtn.innerHTML = svg(muted ? "volOff" : "volOn");
         const rmBtn = document.createElement("button");
         rmBtn.type = "button";
         rmBtn.className = "bd-slot-btn";
@@ -1013,10 +1080,14 @@ window.backdrop = (() => {
     const recent = panel.querySelector(".bd-recent");
     recent.textContent = "";
     const others = (cfg.recent || []).filter((r) => !activeSet.has(r.url)).slice(0, 5);
+    recent.hidden = others.length === 0;
     if (others.length) {
       const head = document.createElement("div");
-      head.className = "bd-label";
-      head.textContent = "Recent";
+      head.className = "bd-card-head";
+      const lbl = document.createElement("span");
+      lbl.className = "bd-label";
+      lbl.textContent = "Recent";
+      head.appendChild(lbl);
       recent.appendChild(head);
     }
     for (const r of others) {

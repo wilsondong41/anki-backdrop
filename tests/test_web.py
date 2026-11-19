@@ -536,9 +536,16 @@ _rt_flush()
 assert len(_cfg["recent"]) == 1 and _rt_exec("document.querySelectorAll('#bd-panel .bd-recent .bd-recent-row').length") == 1, _cfg
 
 # Step D: Toggle True transparency ON and slide Study card to 0 -> persisted in Python & blur/shadow gone.
+_rt_exec("document.querySelector('#bd-panel [data-act=switch-tab][data-tab=controls]').click();")
 _rt_exec("document.querySelector('#bd-panel input[data-key=true_transparency]').click();")
 _rt_exec("(() => { const r = document.querySelector('#bd-panel input[data-key=plate_opacity]'); r.value='0'; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true})); })()")
 _rt_flush()
 assert _cfg["true_transparency"] is True and _cfg["plate_opacity"] == 0, _cfg
+assert _rt_exec("document.querySelector('#bd-panel [data-val=plate_opacity]').textContent") == "0%"
+assert _rt_exec("document.querySelector('#bd-panel .bd-pane[data-pane=controls]').hidden") is False
+assert _rt_exec("document.querySelector('#bd-panel .bd-pane[data-pane=library]').hidden") is True
+_rt_exec("document.querySelector('#bd-panel [data-act=switch-tab][data-tab=library]').click();")
+assert _rt_exec("document.querySelector('#bd-panel .bd-pane[data-pane=library]').hidden") is False
+assert _rt_exec("document.querySelector('#bd-panel .bd-buttons [data-act=break] .bd-act-lbl').textContent") == "Break"
 
 print("web ok")
