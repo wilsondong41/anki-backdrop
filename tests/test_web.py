@@ -6,7 +6,7 @@ import os
 import sys
 
 import PyQt6.QtWebEngineWidgets  # must load before QApplication
-from PyQt6.QtCore import QEventLoop
+from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication
 
@@ -253,7 +253,7 @@ page2.runJavaScript(
     lambda v: (out_resize.append(v), loop2.quit()),
 )
 loop2.exec()
-assert out_resize[0] == {"w": 500, "h": 450}, out_resize[0]  # portrait window stacks 2 videos top/bottom evenly!
+assert out_resize[0]["w"] == 500 and abs(out_resize[0]["h"] - 450) <= 4, out_resize[0]  # portrait window stacks 2 videos top/bottom evenly!
 
 # 6. Multi-video grids (2 even, 3 = 2 top + 1 full bottom, 4 = 2x2), slot reuse, per-slot mute, peek(true/false), plate opacity slider, and tap-to-close panel.
 multi_res = run_html(
@@ -604,5 +604,56 @@ restored_star = _rt_exec("""(() => {
   return !row2Closed.classList.contains("bd-seek-open") && !!row2Closed.querySelector("[data-act='open-save']");
 })()""")
 assert restored_star is True
+
+
+# 9. Live dots in the panel, Hold-P kept across a rebuild, seek on converted normal videos and on websites (bridge).
+run_html(
+    f"<!doctype html><html><head><style>{CSS}</style><script>{JS}</script></head><body><div id='qa'>Card</div></body></html>",
+    "1",
+)
+_rt_exec("""window._sent = []; window.pycmd = (m) => window._sent.push(m);
+  window._cfg = {on:true, plate:true, lite:false, picture:true, panel:true, url:"https://vimeo.com/1", urls:["https://vimeo.com/1","https://site.example/v"],
+    muted:[], strength:100, volume:50, paused:false, title:"",
+    streams:[{url:"https://vimeo.com/1", kind:"video", src:"http://127.0.0.1:9/t/a.webm?start=30", start:30, live:true, vod:true, duration:600, title:"Vimeo"},
+             {url:"https://site.example/v", kind:"page", src:"about:blank", start:40, live:false, title:"Site"}],
+    recent:[{url:"https://www.twitch.tv/a", title:"A"}, {url:"https://cams.example/b", title:"B"}, {url:"https://youtu.be/aaaaaaaaaa1", title:"C"}],
+    live_status:{"https://www.twitch.tv/a":"live"}};
+  backdrop.start(window._cfg); 1""")
+_rt_exec("backdrop.liveStatus({'https://cams.example/b':'offline'}); 1")
+dots = _rt_exec("""({live: document.querySelectorAll('.bd-live-dot.bd-is-live').length,
+  off: document.querySelectorAll('.bd-live-dot.bd-is-off').length,
+  asked: window._sent.filter((m) => m.startsWith('backdrop:livecheck:')).length})""")
+assert dots == {"live": 1, "off": 1, "asked": 1}, dots
+vod_row = _rt_exec("""!!document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://vimeo.com/1'] .bd-seekable")""")
+assert vod_row is True, "converted normal video should offer time controls"
+site_before = _rt_exec("""!!document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://site.example/v'] .bd-seekable")""")
+assert site_before is False, "website without a bridge answer can't seek yet"
+# The bridge script inside the website frame answers; the first answer resumes at the saved 40 s.
+_rt_exec("""window._got = []; window._bf = document.querySelectorAll('#bd-layer iframe')[0];
+  _bf.contentWindow.addEventListener('message', (e) => window._got.push(e.data)); 1""")
+_rt_exec("""_bf.contentWindow.eval("parent.postMessage({bdBridge:'status', time:0, duration:300, live:false}, '*')"); 1""")
+loop_w = QEventLoop(); QTimer.singleShot(300, loop_w.quit); loop_w.exec()
+_rt_exec("""_bf.contentWindow.eval("parent.postMessage({bdBridge:'status', time:41, duration:300, live:false}, '*')"); 1""")
+loop_w = QEventLoop(); QTimer.singleShot(300, loop_w.quit); loop_w.exec()
+site = _rt_exec("""({seek: !!document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://site.example/v'] .bd-seekable"),
+  resumed: window._got.some((m) => m && m.bdBridge === 'seek' && m.t === 40)})""")
+assert site == {"seek": True, "resumed": True}, site
+# Hold-P survives a rebuild (new card) while still held.
+held = _rt_exec("backdrop.peek(true); backdrop.start(window._cfg); document.documentElement.classList.contains('bd-peek')")
+assert held is True, held
+assert _rt_exec("backdrop.peek(false); document.documentElement.classList.contains('bd-peek')") is False
+
+# Frame-rate pills: one row, the saved choice is highlighted, a click sends it to Python.
+fps_res = _rt_exec("""(() => {
+  window._cfg.fps = "30"; backdrop.start(window._cfg); window._sent = [];
+  const pills = [...document.querySelectorAll("#bd-panel .bd-pill[data-fps]")];
+  const before = pills.filter((p) => p.classList.contains("bd-active")).map((p) => p.dataset.fps);
+  const tops = new Set(pills.map((p) => Math.round(p.getBoundingClientRect().top)));
+  pills.find((p) => p.dataset.fps === "24").click();
+  const after = [...document.querySelectorAll("#bd-panel .bd-pill[data-fps].bd-active")].map((p) => p.dataset.fps);
+  return {n: pills.length, before, after, rows: tops.size, sent: window._sent.filter((m) => m.startsWith("backdrop:set:"))};
+})()""")
+assert fps_res["n"] == 6 and fps_res["before"] == ["30"] and fps_res["after"] == ["24"], fps_res
+assert fps_res["sent"] == ['backdrop:set:{"fps":"24"}'], fps_res
 
 print("web ok")

@@ -41,6 +41,8 @@ window.backdrop = (() => {
       stop();
     }
     updateBreak(cfg.break_info);
+    if (cfg.peek) peekHeld = true;
+    if (peekHeld) peek(true);
     update();
   }
 
@@ -49,7 +51,8 @@ window.backdrop = (() => {
 
   function sameSlot(slot, spec) {
     if (!slot || slot.url !== spec.url || slot.kind !== spec.kind) return false;
-    return !(slot.live || spec.live) || slot.src === spec.src;
+    const base = (src) => (src || "").split("?")[0];
+    return !(slot.live || spec.live) || base(slot.src) === base(spec.src);
   }
 
   function unmountSlot(slot) {
@@ -67,7 +70,11 @@ window.backdrop = (() => {
       url: spec.url, kind: spec.kind, src: spec.src, start: spec.start || 0,
       live: !!spec.live, title: spec.title || "", fps: spec.fps || 0, measuredFps: 0, fpsSample: null,
       el, media: null, ytSynced: false, isLiveStream: false, duration: 0, time: spec.start || 0, seeking: false,
+      // A converted normal video (not a live stream): it restarts at a time to seek, so its clock is offset + currentTime.
+      vod: !!(spec.live && spec.vod), offset: spec.live && spec.vod ? Math.floor(spec.start || 0) : 0,
+      baseSrc: (spec.src || "").split("?")[0], bridge: null,
     };
+    if (slot.vod && spec.duration > 0) slot.duration = spec.duration;
     let media;
     if (spec.kind === "video") {
       media = document.createElement("video");
@@ -99,14 +106,19 @@ window.backdrop = (() => {
         }
       });
       media.addEventListener("timeupdate", () => {
-        if (!slot.live && !slot.seeking && !(slots[0] === slot && seeking)) {
-          slot.time = media.currentTime;
+        if ((!slot.live || slot.vod) && !slot.seeking && !(slots[0] === slot && seeking)) {
+          slot.time = slot.offset + media.currentTime;
           if (slots[0] === slot) time = slot.time;
           updateSeek();
         }
       });
       media.addEventListener("error", () => send((slot.live ? "backdrop:error:stream:" : "backdrop:error:video:") + slot.url));
-      if (slot.live) media.addEventListener("ended", () => send("backdrop:error:stream:" + slot.url));
+      // A finished normal video starts over (like loop); a live stream that ends is looked up again.
+      // (A normal video whose connection dropped part-way picks up where it was.)
+      if (slot.live) media.addEventListener("ended", () => {
+        if (!slot.vod) return send("backdrop:error:stream:" + slot.url);
+        seekSlotTo(slot, slot.duration && slot.time < slot.duration - 10 ? slot.time : 0);
+      });
     } else {
       media = document.createElement("iframe");
       // Other websites can't navigate Anki's window away or open pop-ups; YouTube's player is left as-is.
@@ -272,7 +284,8 @@ window.backdrop = (() => {
     for (const s of slots) {
       if (!s.media) continue;
       // A paused live stream is unloaded, which stops its converter; resuming rejoins it where it is now.
-      if (s.live) paused ? (s.media.removeAttribute("src"), s.media.load()) : (s.media.src = s.src);
+      if (s.live && s.vod && !paused) restartAt(s, s.time || 0);
+      else if (s.live) paused ? (s.media.removeAttribute("src"), s.media.load()) : (s.media.src = s.src);
       else if (s.kind === "video") paused ? s.media.pause() : s.media.play().catch(() => {});
       else if (s.kind === "youtube") ytSend(s, { event: "command", func: paused ? "pauseVideo" : "playVideo", args: [] });
     }
@@ -291,6 +304,44 @@ window.backdrop = (() => {
   function ytSend(slot, msg) {
     if (slot && slot.media && slot.media.contentWindow) slot.media.contentWindow.postMessage(JSON.stringify(msg), "*");
   }
+
+  // Status from the bridge script in another website's frame (or a frame inside it).
+  const fromFrame = (w, target) => {
+    for (let i = 0; w && i < 8; i++) {
+      if (w === target) return true;
+      if (w === w.parent) return false;
+      w = w.parent;
+    }
+    return false;
+  };
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (!m || typeof m !== "object" || m.bdBridge !== "status") return;
+    const s = slots.find((x) => x.kind === "page" && x.media && fromFrame(e.source, x.media.contentWindow));
+    if (!s) return;
+    const could = canSlotSeek(s);
+    s.bridge = { at: Date.now(), live: !!m.live };
+    const dur = Number(m.duration);
+    let t = Number(m.time);
+    if (!m.live && Number.isFinite(dur) && dur > 0) s.duration = dur;
+    if (!s.resumed) {  // first answer: pick up where this website's video was left (sites ignore a start time in the link)
+      s.resumed = true;
+      if (!m.live && s.start >= 5 && s.start < s.duration - 5 && t < 3) {
+        e.source.postMessage({ bdBridge: "seek", t: s.start }, "*");
+        t = s.start;
+      }
+    }
+    if (Number.isFinite(t) && !s.seeking && !(slots[0] === s && seeking)) {
+      s.time = Math.max(0, t);
+      if (slots[0] === s) { time = s.time; duration = s.duration; }
+    }
+    could === canSlotSeek(s) ? updateSeek() : update();
+  });
+  setInterval(() => {
+    for (const s of slots) {
+      if (s.kind === "page" && s.media && s.media.contentWindow) s.media.contentWindow.postMessage({ bdBridge: "watch" }, "*");
+    }
+  }, 1000);
 
   window.addEventListener("message", (e) => {
     const slot = slots.find((s) => s.media && e.source === s.media.contentWindow);
@@ -349,8 +400,8 @@ window.backdrop = (() => {
     if (!cfg || !cfg.on || cfg.paused || !slots.length) return;
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-      if (s.live || s.isLiveStream) continue;
-      if (s.kind === "video" && s.media) s.time = s.media.currentTime;
+      if ((s.live && !s.vod) || s.isLiveStream || (s.kind === "page" && !canSlotSeek(s))) continue;
+      if (s.kind === "video" && s.media) s.time = s.offset + s.media.currentTime;
       if (i === 0) time = s.time;
       if (s.time > 0) {
         if (i === 0 && slots.length === 1) send("backdrop:time:" + s.time);
@@ -499,6 +550,15 @@ window.backdrop = (() => {
               <button type="button" class="bd-pill" data-quality="1440">1440</button>
               <button type="button" class="bd-pill" data-quality="2160">4K</button>
             </div>
+            <div class="bd-sub-label" title="Lower uses less CPU and battery; the backdrop is blurred, so 24 or 30 usually looks the same.">Frame rate</div>
+            <div class="bd-pills" role="group" aria-label="Frame rate">
+              <button type="button" class="bd-pill" data-fps="auto">Auto</button>
+              <button type="button" class="bd-pill" data-fps="15">15</button>
+              <button type="button" class="bd-pill" data-fps="24">24</button>
+              <button type="button" class="bd-pill" data-fps="30">30</button>
+              <button type="button" class="bd-pill" data-fps="45">45</button>
+              <button type="button" class="bd-pill" data-fps="0" title="The stream's own frame rate">Source</button>
+            </div>
           </div>
         </div>
         <div class="bd-pane" data-pane="library">
@@ -523,7 +583,7 @@ window.backdrop = (() => {
     // Buttons never take keyboard focus, so Space and the answer keys keep working on the card.
     panel.addEventListener("mousedown", (e) => { if (!e.target.closest("input[type=text], input[type=range]")) e.preventDefault(); });
     panel.addEventListener("click", (e) => {
-      const el = e.target.closest("[data-act], [data-url], [data-quality]");
+      const el = e.target.closest("[data-act], [data-url], [data-quality], [data-fps]");
       if (!el) return;
       const act = el.dataset.act;
       if (act === "switch-tab") {
@@ -670,6 +730,12 @@ window.backdrop = (() => {
         return;
       }
       if (el.dataset.url) return set({ url: el.dataset.url });
+      if (el.dataset.fps) {
+        cfg.fps = el.dataset.fps;
+        set({ fps: cfg.fps });
+        update();
+        return;
+      }
       if (el.dataset.quality) {
         cfg.quality = el.dataset.quality;
         set({ quality: cfg.quality });
@@ -680,7 +746,10 @@ window.backdrop = (() => {
         cfg.panel = !cfg.panel;
         root.classList.toggle("bd-panel-open", cfg.panel);
         set({ panel: cfg.panel });
-        if (cfg.panel) send("backdrop:clip");
+        if (cfg.panel) {
+          send("backdrop:clip");
+          askLive(true);  // dots right away (answers are cached in Python, so this is cheap)
+        }
       }
       if (act === "pause") setPaused(!cfg.paused);
       if (act === "picture") {
@@ -967,6 +1036,8 @@ window.backdrop = (() => {
           b.dataset.url = it.url;
           b.textContent = it.title || shortLink(it.url);
           b.title = it.title || it.url;
+          const fdot = liveDot(it.url);
+          if (fdot) b.prepend(fdot);
           row.appendChild(b);
           if (cfg.on && slots.length < 4 && !activeSet.has(it.url)) {
             const addB = document.createElement("button");
@@ -1011,6 +1082,7 @@ window.backdrop = (() => {
 
   function update(force = false) {
     if (!panel) return;
+    if (cfg && cfg.panel) setTimeout(() => askLive(false), 0);  // after the lists below are drawn
     panel.classList.toggle("bd-dark", night());
     const nowEl = panel.querySelector(".bd-now");
     if (!cfg.on) {
@@ -1051,8 +1123,9 @@ window.backdrop = (() => {
     if (tt) tt.checked = !!cfg.true_transparency;
     updateSeek();
     const q = cfg.quality || "auto";
+    const f = cfg.fps || "auto";
     for (const pill of panel.querySelectorAll(".bd-pill")) {
-      const active = pill.dataset.quality === q;
+      const active = pill.dataset.fps ? pill.dataset.fps === f : pill.dataset.quality === q;
       pill.classList.toggle("bd-active", active);
       pill.setAttribute("aria-pressed", active ? "true" : "false");
     }
@@ -1218,6 +1291,8 @@ window.backdrop = (() => {
       b.dataset.url = r.url;
       b.textContent = r.title || shortLink(r.url);  // text, never HTML: titles come from the web
       b.title = r.title || r.url;
+      const rdot = liveDot(r.url);
+      if (rdot) b.prepend(rdot);
       row.appendChild(b);
       if (cfg.on && slots.length < 4 && !activeSet.has(r.url)) {
         const addB = document.createElement("button");
@@ -1251,6 +1326,34 @@ window.backdrop = (() => {
 
   const shortLink = (url) => (url || "").replace(/^https?:\/\/(www\.)?/, "");
 
+  // Green/red dot for saved streams that are live/offline now. Python looks them up (cached a few minutes)
+  // only while the panel is open; links that aren't streams get no dot.
+  function liveDot(url) {
+    const st = cfg && cfg.live_status && cfg.live_status[url];
+    if (st !== "live" && st !== "offline") return null;
+    const d = document.createElement("span");
+    d.className = "bd-live-dot " + (st === "live" ? "bd-is-live" : "bd-is-off");
+    d.title = st === "live" ? "Live now" : "Offline";
+    return d;
+  }
+  let liveAskedAt = 0;
+  function askLive(forceNow) {
+    if (!cfg || !cfg.panel || !panel) return;
+    if (!forceNow && Date.now() - liveAskedAt < 60000) return;
+    liveAskedAt = Date.now();
+    const urls = [];
+    for (const b of panel.querySelectorAll(".bd-recent .bd-item, .bd-folder-body .bd-item")) {
+      if (b.dataset.url && !urls.includes(b.dataset.url)) urls.push(b.dataset.url);
+    }
+    if (urls.length) send("backdrop:livecheck:" + JSON.stringify(urls.slice(0, 20)));
+  }
+  setInterval(() => askLive(false), 60000);
+  function liveStatus(map) {
+    if (!cfg || !map || typeof map !== "object") return;
+    cfg.live_status = Object.assign({}, cfg.live_status || {}, map);
+    update();
+  }
+
   function fmtTime(sec) {
     sec = Math.max(0, Math.floor(sec || 0));
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -1259,7 +1362,19 @@ window.backdrop = (() => {
   }
 
   function canSlotSeek(s) {
-    return !!(s && !s.live && !s.isLiveStream && (s.kind === "youtube" || s.kind === "video"));
+    if (!s) return false;
+    // Another website: its own video, reached through the bridge script (see BRIDGE_JS in __init__.py).
+    if (s.kind === "page") return !!(s.bridge && !s.bridge.live && s.duration > 0 && Date.now() - s.bridge.at < 6000);
+    if (s.live) return !!s.vod;
+    return !s.isLiveStream && (s.kind === "youtube" || s.kind === "video");
+  }
+
+  // A converted normal video can't jump inside its stream, so the converter restarts at the new time.
+  function restartAt(s, sec) {
+    s.offset = Math.max(0, Math.floor(sec));
+    s.time = s.offset;
+    s.media.src = s.baseSrc + (s.offset ? "?start=" + s.offset : "");
+    if (!cfg.paused) s.media.play().catch(() => {});
   }
 
   function updateSeek() {
@@ -1287,8 +1402,9 @@ window.backdrop = (() => {
     sec = Math.max(0, dur ? Math.min(sec, dur) : sec);
     s.time = sec;
     if (slots[0] === s) time = sec;
-    if (s.kind === "video" && s.media) s.media.currentTime = sec;
+    if (s.kind === "video" && s.media) s.live ? restartAt(s, sec) : (s.media.currentTime = sec);
     if (s.kind === "youtube") ytSend(s, { event: "command", func: "seekTo", args: [sec, true] });
+    if (s.kind === "page" && s.media && s.media.contentWindow) s.media.contentWindow.postMessage({ bdBridge: "seek", t: sec }, "*");
     if (slots[0] === s) send("backdrop:time:" + sec);
     send("backdrop:slot_time:" + JSON.stringify({ url: s.url, time: sec }));
     updateSeek();
@@ -1308,9 +1424,23 @@ window.backdrop = (() => {
     b.textContent = "Play copied link: " + shortLink(link || "");
   }
 
+  let peekHeld = false;  // P is down; kept so a reload or a new card mid-peek stays clear
   function peek(on) {
+    peekHeld = !!on;
     if (!cfg || !cfg.on || cfg.picture === false) on = false;
     root.classList.toggle("bd-peek", !!on);
+  }
+
+  // Python handles Hold-P even when another website's frame has the keyboard (its keys never reach this page),
+  // so it needs to know where focus is: in a text box (P types), in a backdrop frame, or on the card.
+  let focusKind = null;  // null: not reported yet, so a reloaded page always tells Python once
+  function reportFocus() {
+    const a = document.activeElement;
+    const k = isEditable(a) ? "typing" : (a && a.tagName === "IFRAME" && a.closest("#bd-layer") ? "frame" : "");
+    if (k !== focusKind) {
+      focusKind = k;
+      send("backdrop:focus:" + k);
+    }
   }
 
   // Hold P to see the video clearly; capture phase prevents card scripts swallowing it, ignored while typing.
@@ -1327,7 +1457,14 @@ window.backdrop = (() => {
     closePanel();
     set({ panel: false });
   }, true);
-  window.addEventListener("blur", () => peek(false));
+  // Focus moving into a frame on this page also blurs the window; only a real switch away ends the peek.
+  window.addEventListener("blur", () => setTimeout(() => {
+    if (!document.hasFocus()) peek(false);
+    reportFocus();
+  }, 0));
+  document.addEventListener("focusin", reportFocus, true);
+  setTimeout(reportFocus, 0);
+  document.addEventListener("focusout", () => setTimeout(reportFocus, 0), true);
   window.addEventListener("pagehide", stop);
   window.addEventListener("focus", () => { if (cfg && cfg.panel) send("backdrop:clip"); });
 
@@ -1381,5 +1518,5 @@ window.backdrop = (() => {
     new MutationObserver(schedulePlate).observe(root, { attributes: true, attributeFilter: ["data-rf-theme"] });
   }
 
-  return { start, style, setVolume, duck, offer, peek, closePanel, updateBreak, togglePanel: () => panel && panel.querySelector(".bd-tab").click() };
+  return { start, style, setVolume, duck, offer, peek, liveStatus, closePanel, updateBreak, togglePanel: () => panel && panel.querySelector(".bd-tab").click() };
 })();

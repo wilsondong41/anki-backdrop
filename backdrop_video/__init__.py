@@ -33,6 +33,19 @@ DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "pl
             "title": "", "recent": [], "folders": []}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
+# Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
+FPS_CHOICES = [("Auto", "auto"), ("15", "15"), ("24", "24"), ("30", "30"), ("45", "45"), ("Source", "0")]
+VALID_FPS = {v for _, v in FPS_CHOICES}
+
+
+def _fps_choice(c: dict) -> str:
+    """The saved frame-rate choice as one of VALID_FPS (older configs may hold a number like 60)."""
+    raw = str(c.get("multi_fps", "auto")).strip().lower()
+    if raw in VALID_FPS:
+        return raw
+    if raw.isdigit():
+        return "0" if int(raw) >= 60 else min((v for v in VALID_FPS if v not in ("auto", "0")), key=lambda v: abs(int(v) - int(raw)))
+    return "auto"
 _dialog = None
 _browse = None
 _last_browse_url = "https://www.youtube.com"
@@ -46,6 +59,9 @@ _declined_urls = set()  # links declined this session (without "Don't show again
 _retried = {}  # link -> when its stream was last looked up again after it stopped
 _not_live = set()  # links a quiet lookup found no stream for, so it isn't repeated every page
 _direct_urls = set()  # direct video files (.mp4/.mov) that fell back to mpv -> WebM transcoding
+_web_focus = ""  # where the keyboard is inside mw.web: "" (the card), "typing" (a text box), "frame" (a backdrop website)
+_live_checking = set()  # links whose live status is being looked up
+_live_pool = None  # at most 3 lookups at once
 
 
 def conf() -> dict:
@@ -306,6 +322,11 @@ def _stream_spec(url: str, start: int, paused: bool, title: str = "") -> dict:
     spec = {"url": url, "title": title, **source(url, start, paused)}
     if live.ready(url):
         spec.update(kind="video", src=live.address(url), start=0, live=True)
+        clip = live.vod(url)
+        if clip:  # a normal video (not live): the converter restarts at the saved time, which also makes seeking work
+            spec.update(vod=True, duration=clip.get("duration") or 0, start=int(start))
+            if start >= 1:
+                spec["src"] += f"?start={int(start)}"
     elif spec["kind"] == "page" and (
         STREAM_SITES.search(urlparse(spec["src"]).hostname or "") or LIVE_MEDIA.search(urlparse(spec["src"]).path)
     ):
@@ -414,6 +435,9 @@ def state(plate: bool) -> dict:
     s["urls"] = urls
     s["muted"] = [u for u in (c.get("muted") or []) if isinstance(u, str) and u in urls]
     s["break_info"] = _break_info()
+    s["fps"] = _fps_choice(c)
+    s["live_status"] = {u: st for u in _saved_links(c) if (st := live.cached_status(u))}
+    s["peek"] = bool(getattr(globals().get("_peek_filter"), "_peeking", False))
     s["auto_note"] = live.effective_note(
         c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
         fps_list=live.active_fps(urls) if c["on"] else None,
@@ -518,6 +542,18 @@ def on_js_message(handled, message, context):
         except (ValueError, TypeError):
             pass
         return True, None
+    if message.startswith("backdrop:focus:"):
+        global _web_focus
+        _web_focus = message.split(":", 2)[2] if message.split(":", 2)[2] in ("typing", "frame") else ""
+        return True, None
+    if message.startswith("backdrop:livecheck:"):
+        try:
+            urls = json.loads(message.split(":", 2)[2])
+        except ValueError:
+            urls = []
+        if isinstance(urls, list):
+            check_live([u for u in urls if isinstance(u, str)][:20])
+        return True, None
     if message == "backdrop:clip":
         mw.web.eval("window.backdrop && backdrop.offer(%s)" % json.dumps(clipboard_link()))
         return True, None
@@ -608,11 +644,11 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
                 return
     _looking.add(url)
     raw_quality = conf()["quality"]
-    multi_fps = conf().get("multi_fps", "auto")
+    multi_fps = _fps_choice(conf())
     stream_count = max(1, len(active_urls()))
     multi = stream_count >= 2
     quality = "360" if (raw_quality == "auto" and multi) else raw_quality
-    cap_fps = raw_quality == "auto" or multi
+    cap_fps = raw_quality == "auto" or multi or multi_fps != "auto"
     if not quiet:
         tooltip("Starting the live stream…")
 
@@ -693,6 +729,44 @@ def try_live(s: dict, prompt_if_missing: bool = False, only_url: str = None) -> 
         known = STREAM_SITES.search(parsed.hostname or "")
         if known or prompt_if_missing or os.path.exists(live.helper_path(ADDON_DIR)):
             go_live(url, quiet=not known)
+
+
+def _saved_links(c: dict) -> set:
+    """Links in the Recent list and folders: the only ones whose live status is looked up."""
+    links = {r.get("url") for r in c.get("recent") or [] if isinstance(r, dict)}
+    links |= {it["url"] for f in _sanitize_folders(c.get("folders")) for it in f["items"]}
+    return {u for u in links if isinstance(u, str)}
+
+
+def check_live(urls: list) -> None:
+    """Look up which saved links are live now (green/red dot in the panel). Only links that could be streams,
+    only with the yt-dlp helper installed, at most 3 at once; answers are cached for a few minutes (live.py)."""
+    global _live_pool
+    if sys.version_info < (3, 10) or not os.path.exists(live.helper_path(ADDON_DIR)):
+        return
+    saved = _saved_links(conf())  # card scripts can send this message too; only the user's own saved links are checked
+    todo = [u for u in urls if u in saved and u.startswith(("http://", "https://")) and u not in _live_checking
+            and source(u, 0)["kind"] in ("page", "youtube") and not LIVE_MEDIA.search(urlparse(u).path)
+            and live.cached_status(u) is None]
+    if not todo:
+        return
+    if _live_pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _live_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="backdrop-live")
+
+    def report(url: str, fut) -> None:
+        _live_checking.discard(url)
+        try:
+            status = fut.result()
+        except Exception:  # noqa: BLE001
+            return
+        if status:
+            mw.web.eval("window.backdrop && backdrop.liveStatus(%s)" % json.dumps({url: status}))
+
+    for u in todo:
+        _live_checking.add(u)
+        fut = _live_pool.submit(live.check_status, ADDON_DIR, u)
+        fut.add_done_callback(lambda f, u=u: mw.taskman.run_on_main(lambda: report(u, f)))
 
 
 def play_url(url: str) -> None:
@@ -794,6 +868,31 @@ def remove_url(url: str) -> None:
     save(url=primary, urls=new_urls, muted=muted, title=_recent_title(c, primary))
 
 
+def set_fps(choice: str) -> None:
+    """Change the frame rate of converted streams; streams playing now restart with it."""
+    if choice not in VALID_FPS:
+        return
+    c = conf()
+    if _fps_choice(c) == choice:
+        return
+    save(multi_fps=choice if choice == "auto" else int(choice))
+    if _dialog is not None:
+        idx = _dialog.fps.findData(choice)
+        if idx >= 0:
+            _dialog.fps.blockSignals(True)
+            _dialog.fps.setCurrentIndex(idx)
+            _dialog.fps.blockSignals(False)
+    if c["on"]:
+        to_reload = [u for u in active_urls(c) if live.ready(u)]
+        for u in to_reload:
+            live.forget(u)
+        refresh()
+        for u in to_reload:
+            go_live(u, quiet=True)
+    else:
+        refresh()
+
+
 def set_quality(quality: str) -> None:
     if quality not in VALID_QUALITIES:
         return
@@ -883,6 +982,9 @@ def apply(changes: dict) -> None:
     quality = changes.get("quality")
     if isinstance(quality, str) and quality in VALID_QUALITIES:
         set_quality(quality)
+    fps = changes.get("fps")
+    if isinstance(fps, str) and fps in VALID_FPS:
+        set_fps(fps)
 
 
 def refresh(ask_live: bool = False, only_url: str = None) -> None:
@@ -926,6 +1028,11 @@ def on_profile_will_close() -> None:
     _stop_break_timer()
     save_position()
     live.stop_all()
+    global _live_pool
+    if _live_pool is not None:  # don't make Anki wait for queued live lookups when it closes
+        _live_pool.shutdown(wait=False, cancel_futures=True)
+        _live_pool = None
+        _live_checking.clear()
 
 
 def duck(on: bool) -> None:
@@ -1042,6 +1149,12 @@ class BackdropDialog(QDialog):
         self.quality.setCurrentIndex(max(0, self.quality.findData(c["quality"])))
         self.quality.setToolTip("Applies to live streams (Twitch, YouTube Live, etc.). Regular YouTube videos adjust automatically.")
         self.quality.currentIndexChanged.connect(self.set_quality)
+        self.fps = QComboBox()
+        for label, value in FPS_CHOICES:
+            self.fps.addItem(label if value in ("auto", "0") else f"{label} fps", value)
+        self.fps.setCurrentIndex(max(0, self.fps.findData(_fps_choice(c))))
+        self.fps.setToolTip("Frame rate for live streams and other converted videos. Lower uses less CPU and battery.")
+        self.fps.currentIndexChanged.connect(lambda _i: set_fps(self.fps.currentData()))
 
         has_helper = os.path.exists(live.helper_path(ADDON_DIR))
         self.helper_btn = QPushButton("yt-dlp Installed ✓ (Update)" if has_helper else "Download yt-dlp Helper (~3 MB)")
@@ -1058,6 +1171,7 @@ class BackdropDialog(QDialog):
         form.addRow("", self.true_transparency)
         form.addRow("Volume", self.volume)
         form.addRow("Stream quality", self.quality)
+        form.addRow("Frame rate", self.fps)
         form.addRow("Live helper", self.helper_btn)
         form.addRow("", helper_note)
         set_lay.addLayout(form)
@@ -1141,6 +1255,11 @@ class BackdropDialog(QDialog):
                 self.quality.blockSignals(True)
                 self.quality.setCurrentIndex(q_idx)
                 self.quality.blockSignals(False)
+            f_idx = self.fps.findData(_fps_choice(c))
+            if f_idx >= 0 and self.fps.currentIndex() != f_idx:
+                self.fps.blockSignals(True)
+                self.fps.setCurrentIndex(f_idx)
+                self.fps.blockSignals(False)
             self.off.setEnabled(bool(c["on"]))
             urls = active_urls(c)
             note = live.effective_note(
@@ -1668,6 +1787,58 @@ def open_browse() -> None:
     dlg.activateWindow()
 
 
+BRIDGE_JS = r"""
+(function () {
+  if (window.top === window || window.__bdBridge) return;
+  window.__bdBridge = true;
+  // The largest playing-size <video> on this website frame.
+  const pick = () => {
+    let best = null, area = 0;
+    for (const v of document.querySelectorAll("video")) {
+      const r = v.getBoundingClientRect(), a = r.width * r.height;
+      if (a > area && v.readyState > 0) { best = v; area = a; }
+    }
+    return best;
+  };
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (!m || typeof m !== "object" || typeof m.bdBridge !== "string" || m.bdBridge === "status") return;
+    for (const f of document.querySelectorAll("iframe")) {
+      try { f.contentWindow && f.contentWindow.postMessage(m, "*"); } catch (_) {}
+    }
+    const v = pick();
+    if (!v) return;
+    if (m.bdBridge === "seek" && isFinite(m.t) && isFinite(v.duration)) {
+      v.currentTime = Math.max(0, Math.min(v.duration - 1, m.t));
+    }
+    try {
+      window.top.postMessage({ bdBridge: "status", time: v.currentTime || 0,
+        duration: isFinite(v.duration) ? v.duration : 0, live: v.duration === Infinity }, "*");
+    } catch (_) {}
+  });
+})();
+"""
+
+
+def _install_bridge() -> None:
+    """Let the panel see and change the time of a video on any website shown as a backdrop (not only YouTube)."""
+    web = getattr(mw, "web", None)
+    if web is None or getattr(web, "_backdrop_bridge", False):
+        return
+    try:
+        from aqt.qt import QWebEngineScript
+        script = QWebEngineScript()
+        script.setName("backdrop-bridge")
+        script.setSourceCode(BRIDGE_JS)
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentReady)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.ApplicationWorld)
+        script.setRunsOnSubFrames(True)
+        web.page().scripts().insert(script)
+        web._backdrop_bridge = True
+    except Exception as e:  # noqa: BLE001  older Qt: seeking on websites just stays off
+        print("Backdrop: website time bridge unavailable:", e)
+
+
 _peek_filter = None
 
 
@@ -1707,31 +1878,48 @@ def _install_peek_filter() -> None:
                 self._peeking = False
                 mw.web.eval("window.backdrop && backdrop.peek(false)")
                 return False
-            if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) or not self._is_p(event):
                 return False
-            if event.key() != Qt.Key.Key_P or event.isAutoRepeat():
-                return False
+            in_web = self._in_widget(mw.app.focusWidget(), mw.web)
+            # Focus inside a backdrop website: the key would go to that site, so Python handles P and keeps it from the site.
+            swallow = in_web and _web_focus == "frame" and mw.state in ("review", "overview") and conf()["on"]
+            if event.isAutoRepeat():
+                return swallow
             if t == QEvent.Type.KeyRelease:
                 if self._peeking:
                     self._peeking = False
                     mw.web.eval("window.backdrop && backdrop.peek(false)")
-                return False
-            if event.modifiers() != Qt.KeyboardModifier.NoModifier:
+                return swallow
+            if event.modifiers() not in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
                 return False
             if mw.state not in ("review", "overview") or not conf()["on"] or mw.app.activeWindow() is not mw:
                 return False
             fw = mw.app.focusWidget()
-            if self._in_widget(fw, mw.web) or isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
+            if isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
                 return False
+            if in_web and _web_focus != "frame":
+                return False  # the card page itself handles P (and knows when a text box is focused)
             self._peeking = True
             mw.web.eval("window.backdrop && backdrop.peek(true)")
-            return False
+            return swallow
+
+        @staticmethod
+        def _is_p(event) -> bool:
+            if event.key() == Qt.Key.Key_P:
+                return True
+            try:  # other keyboard layouts: the physical P key
+                native = event.nativeVirtualKey()
+            except Exception:  # noqa: BLE001
+                return False
+            return (sys.platform == "darwin" and native == 35) or (sys.platform == "win32" and native == 0x50)
 
     _peek_filter = _PeekFilter()
     mw.app.installEventFilter(_peek_filter)
 
 
 _install_peek_filter()
+_install_bridge()
+gui_hooks.main_window_did_init.append(_install_bridge)
 action = mw.form.menuTools.addAction("Backdrop Video…")
 action.setShortcut("Ctrl+Shift+B")
 action.triggered.connect(open_dialog)

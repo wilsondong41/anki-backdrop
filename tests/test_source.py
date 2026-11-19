@@ -273,4 +273,52 @@ ns["on_js_message"]((False, None), 'backdrop:slot_time:{"url":"https://youtu.be/
 ns["on_js_message"]((False, None), 'backdrop:slot_time:{"url":"https://youtu.be/aaaaaaaaaa2","time":345}', None)
 st_times = ns["state"](True)
 assert "&start=120" in st_times["streams"][0]["src"] and "&start=345" in st_times["streams"][1]["src"], st_times["streams"]
+# Live status: yt-dlp answers and errors -> green/red/none, cached for a few minutes.
+import time as _t
+assert live.classify({"is_live": True}) == "live"
+assert live.classify({"live_status": "was_live"}) == "offline"
+assert live.classify({"live_status": "not_live", "duration": 300}) == ""
+assert live.classify(Exception("ERROR: [twitch:stream] lofi: The channel is not currently live")) == "offline"
+assert live.classify(Exception("ERROR: Room is currently offline")) == "offline"
+assert live.classify(Exception("HTTP Error 404: Not Found")) == ""
+live._status["https://www.twitch.tv/lofi_channel"] = ("live", _t.time())
+live._status["https://example.com/cam"] = ("offline", _t.time() - live.LIVE_TTL - 5)  # stale
+assert live.cached_status("https://www.twitch.tv/lofi_channel") == "live"
+assert live.cached_status("https://example.com/cam") is None
+store.setdefault("recent", []).insert(0, {"url": "https://www.twitch.tv/lofi_channel", "title": "Lofi", "time": 0})
+assert ns["state"](True)["live_status"].get("https://www.twitch.tv/lofi_channel") == "live", ns["state"](True)["live_status"]
+# A converted normal video (not live) restarts at the saved time, so it can be skipped/scrubbed like YouTube.
+vlink = "https://vimeo.com/123456"
+live._links[vlink] = "sidv"
+live._meta[vlink] = {"vod": True, "duration": 600}
+spec = ns["_stream_spec"](vlink, 42, False)
+assert spec["vod"] is True and spec["duration"] == 600 and spec["src"].endswith(".webm?start=42"), spec
+assert "?start" not in ns["_stream_spec"](vlink, 0, False)["src"]
+live._meta[vlink] = {"vod": False}
+assert "vod" not in ns["_stream_spec"](vlink, 42, False)
+# The card page reports where the keyboard is, for Hold-P inside websites.
+ns["on_js_message"]((False, None), "backdrop:focus:frame", None)
+assert ns["_web_focus"] == "frame"
+ns["on_js_message"]((False, None), "backdrop:focus:bogus", None)
+assert ns["_web_focus"] == ""
+# Only web addresses reach mpv; only saved links get live lookups.
+for bad in ("file:///etc/passwd", "--script=x.lua", "lavfi://color"):
+    try:
+        live._store_stream("https://x.example/", bad, None, {}, "auto")
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+assert "https://www.twitch.tv/lofi_channel" in ns["_saved_links"](store)
+assert "https://evil.example/" not in ns["_saved_links"](store)
+# Frame-rate picker: saved choice, older numbers, the converter cap and the status line.
+assert ns["_fps_choice"]({"multi_fps": "auto"}) == "auto" and ns["_fps_choice"]({"multi_fps": 24}) == "24"
+assert ns["_fps_choice"]({"multi_fps": 60}) == "0" and ns["_fps_choice"]({"multi_fps": 50}) == "45" and ns["_fps_choice"]({"multi_fps": "x"}) == "auto"
+assert live.adaptive_fps(1, "", multi_fps="15") == 15 and live.adaptive_fps(1, "", multi_fps="0") == 0
+assert live._vf_scale(720, 24) == "--vf=lavfi=[fps=fps=24,scale=-2:'min(ih,720)']", live._vf_scale(720, 24)
+assert live.effective_note("720", 1, multi_fps=24) == "720p, up to 24 fps", live.effective_note("720", 1, multi_fps=24)
+assert live.effective_note("720", 1, multi_fps=0) == "720p, uncapped fps"
+assert live.effective_note("720", 1) == "720p"
+store["multi_fps"] = 30
+assert ns["state"](True)["fps"] == "30"
+store["multi_fps"] = "auto"
 print("ok")

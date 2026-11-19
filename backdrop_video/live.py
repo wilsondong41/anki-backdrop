@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import zipimport
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,12 @@ _links = {}  # page link -> stream id; a fresh id per lookup, so a retry reloads
 _streams = {}  # stream id -> (video url, audio url or None, http headers dict)
 _fps = {}  # page link -> detected/effective integer fps
 _procs = set()  # running converters; mpv outlives Anki unless stopped
+_meta = {}  # page link -> {"vod": bool, "duration": float}; vod = a normal video (can seek), not a live stream
+LIVE_TTL, OTHER_TTL = 180, 3600  # seconds a live/offline answer, or a "not a stream" answer, is kept
+_status = {}  # page link -> (status, checked at); status "live", "offline" or "" (not a stream / unknown)
+OFFLINE_ERROR = re.compile(
+    r"offline|not (currently )?live|no longer live|isn't live|is not live|has ended|stream (has )?ended|"
+    r"will begin|starts in|scheduled|is private|hidden|away|password|ticket|not online", re.I)
 
 
 @atexit.register
@@ -70,7 +77,13 @@ def _ensure_mpv(quality: str = "auto") -> str:
     return str(quality) if str(quality) in QUALITY_HEIGHT else "auto"
 
 
+WEB_LINK = re.compile(r"^https?://", re.I)
+
+
 def _store_stream(link: str, video: str, audio, headers: dict, quality: str, max_fps: int = 0, fps=None) -> None:
+    # Only web addresses go to mpv: a site can't make it read a local file or pass it an option.
+    if not isinstance(video, str) or not WEB_LINK.match(video) or (audio and (not isinstance(audio, str) or not WEB_LINK.match(audio))):
+        raise ValueError("not a web video address")
     sid = secrets.token_hex(4)
     with _lock:
         _streams[sid] = (video, audio, headers, quality, max_fps)
@@ -112,10 +125,10 @@ def adaptive_fps(stream_count: int = 1, video_help: str = "", multi_fps="auto") 
     """Pick an FPS cap (>=30, or 0 for uncapped) using hardware cores, stream count, and optional multi_fps override."""
     if isinstance(multi_fps, (int, float)) and not isinstance(multi_fps, bool):
         val = int(multi_fps)
-        return 0 if val <= 0 else max(30, min(120, val))
+        return 0 if val <= 0 else max(15, min(120, val))
     if isinstance(multi_fps, str) and multi_fps.strip().isdigit():
         val = int(multi_fps.strip())
-        return 0 if val <= 0 else max(30, min(120, val))
+        return 0 if val <= 0 else max(15, min(120, val))
     cores = os.cpu_count() or 4
     heavy = bool(video_help) and not re.search(r"--ovc=libvpx\s", video_help)
     if stream_count >= 3:
@@ -147,6 +160,9 @@ def effective_note(quality: str = "auto", stream_count: int = 1, multi_fps="auto
     label = "4K" if q == "2160" else f"{q}p"
     if measured:
         return f"{label}, {measured}"
+    chosen = str(multi_fps).strip().lower() != "auto"  # the user picked a frame rate
+    if chosen:
+        return f"{label}, {'uncapped fps' if fps == 0 or fps >= 60 else f'up to {fps} fps'}"
     if stream_count >= 2 and fps > 0:
         return f"{label}, {'up to 60 fps' if fps >= 60 else f'up to {fps} fps'}"
     return label
@@ -158,6 +174,10 @@ def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap
     vhelp = (_codec_help or ("", ""))[0]
     fps_cap = adaptive_fps(stream_count, vhelp, multi_fps=multi_fps) if (cap_fps or q == "auto") else 0
     _store_stream(link, link, None, {}, q, max_fps=fps_cap)
+    # A plain video file can restart at any time; a .m3u8/.mpd manifest may be live, so it can't.
+    path = link.split("?", 1)[0].lower()
+    with _lock:
+        _meta[link] = {"vod": not path.endswith((".m3u8", ".mpd")), "duration": 0.0}
     return ""
 
 
@@ -192,6 +212,12 @@ def find(folder: str, link: str, quality: str = "auto", stream_count: int = 1, c
     if isinstance(src_fps, (int, float)) and src_fps > 0:
         known_fps = min(round(src_fps), fps_cap) if fps_cap else round(src_fps)
     _store_stream(link, video, audio, headers, q, max_fps=fps_cap, fps=known_fps)
+    is_live = bool(info.get("is_live")) or info.get("live_status") in ("is_live", "is_upcoming")
+    duration = info.get("duration")
+    with _lock:
+        _meta[link] = {"vod": not is_live,
+                       "duration": float(duration) if isinstance(duration, (int, float)) and duration > 0 else 0.0}
+        _status[link] = ("live" if is_live else "", time.time())
     if info.get("extractor_key", "").startswith("Twitch") and info.get("description"):
         return f"{info.get('uploader') or info['uploader_id']} · {info['description']}"  # Twitch's title is the channel
     # yt-dlp adds the lookup time to live titles ("... 2026-10-26 01:55").
@@ -202,6 +228,59 @@ class _Silent:
     """yt-dlp would print to stderr, which Anki replaces with an object yt-dlp can't use; errors still raise."""
     def debug(self, msg): pass
     info = warning = error = debug
+
+
+def vod(link: str) -> dict:
+    """{"vod": True, "duration": seconds or 0} for a converted normal video (it can restart at a time); else {}."""
+    with _lock:
+        m = _meta.get(link)
+    return dict(m) if m and m.get("vod") else {}
+
+
+def classify(info_or_error) -> str:
+    """'live', 'offline' or '' (not a stream, or can't tell) from yt-dlp's answer or its error."""
+    if isinstance(info_or_error, BaseException):
+        return "offline" if OFFLINE_ERROR.search(str(info_or_error)) else ""
+    info = info_or_error if isinstance(info_or_error, dict) else {}
+    status = info.get("live_status")
+    if info.get("is_live") or status == "is_live":
+        return "live"
+    if status in ("is_upcoming", "was_live", "post_live"):
+        return "offline"
+    return ""
+
+
+def cached_status(link: str):
+    """The last answer for a link if it's still fresh, else None."""
+    with _lock:
+        hit = _status.get(link)
+    if not hit:
+        return None
+    value, at = hit
+    return value if time.time() - at < (LIVE_TTL if value else OTHER_TTL) else None
+
+
+def check_status(folder: str, link: str) -> str:
+    """Is this link a live stream right now? One light page lookup (no video is fetched); the answer is cached."""
+    hit = cached_status(link)
+    if hit is not None:
+        return hit
+    if sys.version_info < (3, 10) or not os.path.exists(helper_path(folder)):
+        return ""
+    if helper_path(folder) not in sys.path:
+        sys.path.insert(0, helper_path(folder))
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True,
+            "logger": _Silent(), "socket_timeout": 15, "extract_flat": "in_playlist"}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            value = classify(ydl.extract_info(link, download=False))
+    except Exception as e:  # noqa: BLE001  offline rooms and channels raise
+        value = classify(e)
+    with _lock:
+        _status[link] = (value, time.time())
+    return value
 
 
 def address(link: str) -> str:
@@ -225,6 +304,7 @@ def forget(link: str) -> None:
     with _lock:
         _streams.pop(_links.pop(link, None), None)
         _fps.pop(link, None)
+        _meta.pop(link, None)
 
 
 def _mpv_cmd_env() -> tuple:
@@ -241,7 +321,7 @@ def mpv() -> list:
 
 
 def _vf_scale(h: int, max_fps: int = 0) -> str:
-    # Cap FPS adaptively (>=30) to limit encode CPU without duplicating frames; clamp above 1080p so lower-res feeds don't upscale.
+    # Cap FPS (15-45 when picked, else adaptive >=30) to limit encode CPU without duplicating frames; clamp above 1080p so lower-res feeds don't upscale.
     if max_fps and 0 < max_fps < 60:
         return f"--vf=lavfi=[fps=fps={max_fps},scale=-2:'min(ih,{h})']"
     return f"--vf=lavfi=[scale=-2:'min(ih,{h})']" if h > 1080 else f"--vf=scale=-2:{h}"
@@ -283,8 +363,10 @@ def codecs(quality: str = "auto", max_fps: int = 0) -> list:
     return pick_codecs(_codec_help[0], _codec_help[1], quality, max_fps=max_fps)
 
 
-def convert_cmd(video: str, audio, headers: dict = None, quality: str = "auto", max_fps: int = 0) -> list:
+def convert_cmd(video: str, audio, headers: dict = None, quality: str = "auto", max_fps: int = 0, start: float = 0) -> list:
     cmd = mpv() + ["--no-config", "--really-quiet", "--no-terminal", "--hwdec=auto-safe", video, "--o=-", "--of=webm"] + codecs(quality, max_fps=max_fps)
+    if start and start > 0:
+        cmd.append(f"--start=+{float(start):.1f}")  # a normal video restarted at a time (seeking); live streams ignore it
     for k, v in (headers or {}).items():
         if not isinstance(k, str) or not isinstance(v, str) or "\n" in v or "\r" in v:
             continue
@@ -302,7 +384,16 @@ def convert_cmd(video: str, audio, headers: dict = None, quality: str = "auto", 
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        parts = self.path.split("?", 1)[0].strip("/").split("/")
+        path, _, query = self.path.partition("?")
+        parts = path.strip("/").split("/")
+        start = 0.0
+        for pair in query.split("&"):
+            key, _, value = pair.partition("=")
+            if key == "start":
+                try:
+                    start = max(0.0, min(float(value), 864000.0))
+                except ValueError:
+                    start = 0.0
         with _lock:
             stream = _streams.get(parts[1][:-5]) if len(parts) == 2 and parts[0] == _token else None
         if not stream or not parts[1].endswith(".webm"):
@@ -313,7 +404,7 @@ class _Handler(BaseHTTPRequestHandler):
         raw_fps = stream[4] if len(stream) > 4 else 0
         max_fps = (30 if raw_fps is True else (0 if raw_fps is False else int(raw_fps)))
         _, env = _mpv_cmd_env()
-        proc = subprocess.Popen(convert_cmd(video, audio, headers, quality, max_fps=max_fps), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        proc = subprocess.Popen(convert_cmd(video, audio, headers, quality, max_fps=max_fps, start=start), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW)
         with _lock:
             _procs.add(proc)
