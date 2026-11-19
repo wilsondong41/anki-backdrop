@@ -6,3 +6,4 @@ Most controls live in the study sidebar and **Tools → Backdrop Video…**. The
   - `"auto"` *(default)*: scales safely between `30` and `60` fps based on CPU cores and active stream count.
   - `45` or `60`: forces up to `45` or `60` fps even with 2+ concurrent streams (uses more CPU).
   - `0`: disables the FPS cap (uses native source frame rate).
+- **`suppress_ytdlp_prompt`**: Set to `true` (or check **Don't show this again** on the prompt) to stop asking for the `yt-dlp` helper download on incompatible streams. You can still download `yt-dlp` anytime from **Tools → Backdrop Video…**.

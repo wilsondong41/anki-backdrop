@@ -8,7 +8,7 @@ aqt.gui_hooks = types.SimpleNamespace()
 aqt.mw = types.SimpleNamespace(addonManager=types.SimpleNamespace(
     addonFromModule=lambda n: "backdrop_video", setWebExports=lambda *a: None, getConfig=lambda n: None))
 sys.modules["aqt.overview"].Overview = sys.modules["aqt.reviewer"].Reviewer = object
-sys.modules["aqt.utils"].tooltip = print
+sys.modules["aqt.utils"].tooltip = lambda *a, **k: None
 sys.modules["aqt.utils"].askUser = lambda *a, **k: False
 for n in "QComboBox QDialog QFormLayout QHBoxLayout QLabel QLineEdit QPushButton QSlider Qt QVBoxLayout".split():
     setattr(sys.modules["aqt.qt"], n, object)
@@ -83,6 +83,7 @@ assert "threads=4" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", 
 assert "--ovc=libvpx" not in live.pick_codecs("  --ovc=libvpx-vp9  x\n", "") and live.pick_codecs("--ovc=libx264", "") == []
 # Channel /live pages and Twitch are worth a stream lookup; ordinary pages are not.
 calls = []
+orig_go_live = ns["go_live"]
 ns["go_live"] = lambda url, quiet=False: calls.append((url, quiet))
 os_path_exists = ns["os"].path.exists
 ns["os"].path.exists = lambda p: False  # helper not downloaded yet
@@ -204,4 +205,23 @@ try:
     ns["on_js_message"]((False, None), "backdrop:break:0", None)
 finally:
     sys.modules.pop("pb_generic", None)
+# Incompatible live stream prompt: declining once still asks on a different URL unless "Don't show this again" is saved.
+ns["go_live"] = orig_go_live
+asked = []
+orig_ver = sys.version_info
+sys.version_info = (3, 12, 0)
+ns["os"].path.exists = lambda p: False
+ns["_ask_download_helper"] = lambda: (asked.append(1) or False, False)
+try:
+    ns["go_live"]("https://www.twitch.tv/stream1")
+    ns["go_live"]("https://www.twitch.tv/stream1")  # same URL suppressed this session until replayed
+    ns["go_live"]("https://www.twitch.tv/stream2")  # different stream still asks
+    assert len(asked) == 2, asked
+    ns["_ask_download_helper"] = lambda: (asked.append(2) or False, True)  # check "Don't show this again"
+    ns["go_live"]("https://www.twitch.tv/stream3")
+    ns["go_live"]("https://www.twitch.tv/stream4")  # now globally suppressed
+    assert len(asked) == 3 and ns["conf"]()["suppress_ytdlp_prompt"] is True, asked
+finally:
+    sys.version_info = orig_ver
+    ns["os"].path.exists = os_path_exists
 print("ok")

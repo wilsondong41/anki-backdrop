@@ -11,6 +11,7 @@
     "panel": false,
     "quality": "auto",
     "multi_fps": "auto",
+    "suppress_ytdlp_prompt": false,
     "title": "",
     "recent": []
 }

@@ -27,7 +27,7 @@ YT_ID = re.compile(r"(?:youtu\.be/|/embed/|/shorts/|/live/|[?&]v=)([\w-]{11})")
 MAX_STREAMS = 4
 DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70, "volume": 50,
             "time": 0, "paused": False, "picture": True, "panel": False, "quality": "auto", "multi_fps": "auto",
-            "title": "", "recent": []}
+            "suppress_ytdlp_prompt": False, "title": "", "recent": []}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 _dialog = None
@@ -39,7 +39,7 @@ _break_from_review = False
 _break_timer = None
 ADDON_DIR = os.path.dirname(__file__)
 _looking = set()  # links whose live stream is being looked up
-_declined = False  # said no to the helper download this session
+_declined_urls = set()  # links declined this session (without "Don't show again"), cleared on explicit replay
 _retried = {}  # link -> when its stream was last looked up again after it stopped
 _not_live = set()  # links a quiet lookup found no stream for, so it isn't repeated every page
 _direct_urls = set()  # direct video files (.mp4/.mov) that fell back to mpv -> WebM transcoding
@@ -348,9 +348,31 @@ def on_js_message(handled, message, context):
     return True, None
 
 
+def _ask_download_helper() -> tuple:
+    """Prompt to download yt-dlp with a 'Don't show again' checkbox. Returns (accepted, dont_show_again)."""
+    msg = (
+        "Anki's built-in browser can't play this live stream or web video directly without a free helper "
+        "called yt-dlp (~3 MB, from github.com/yt-dlp).\n\n"
+        "Download yt-dlp now? (You can also download it anytime in Tools → Backdrop Video…)"
+    )
+    try:
+        from aqt.qt import QCheckBox, QMessageBox
+        box = QMessageBox(mw)
+        box.setWindowTitle("Backdrop Video")
+        box.setText(msg)
+        cb = QCheckBox("Don't show this again")
+        box.setCheckBox(cb)
+        dl_btn = box.addButton("Download yt-dlp", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Not Now", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(dl_btn)
+        box.exec()
+        return box.clickedButton() is dl_btn, cb.isChecked()
+    except Exception:
+        return bool(askUser(msg, title="Backdrop Video")), False
+
+
 def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
     """Live streams and HLS/H.264 URLs convert via mpv (plus yt-dlp when extracting from a webpage)."""
-    global _declined
     if url in _looking or live.ready(url):
         return
     parsed_src = source(url, 0)["src"]
@@ -361,13 +383,15 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
                 tooltip("Live streams need Anki 23.10 or newer.", period=6000)
             return
         if not os.path.exists(live.helper_path(ADDON_DIR)):
-            if _declined or not askUser(
-                    "This looks like a live stream or web video. Anki needs a free helper called yt-dlp "
-                    "(about 3 MB, from github.com/yt-dlp) to pull the video feed.\n\nDownload it now?",
-                    title="Backdrop Video"):
-                _declined = True
+            if conf().get("suppress_ytdlp_prompt") or url in _declined_urls:
+                return
+            accepted, dont_show = _ask_download_helper()
+            if dont_show:
+                save(suppress_ytdlp_prompt=True)
+            if not accepted:
+                _declined_urls.add(url)
                 if not quiet:
-                    tooltip("Without the helper, try a YouTube, .webm, or .m3u8 stream link instead.", period=8000)
+                    tooltip("You can download yt-dlp anytime in Tools → Backdrop Video…", period=7000)
                 return
     _looking.add(url)
     raw_quality = conf()["quality"]
@@ -454,6 +478,7 @@ def play_url(url: str) -> None:
     global position
     url = url.strip()
     _not_live.discard(url)
+    _declined_urls.discard(url)
     live.forget(url)
     c = conf()
     for prev in active_urls(c):
@@ -479,6 +504,7 @@ def add_url(url: str) -> bool:
     if url in cur or len(cur) >= MAX_STREAMS:
         return False
     _not_live.discard(url)
+    _declined_urls.discard(url)
     live.forget(url)
     new_urls = cur + [url]
     muted = [u for u in (c.get("muted") or []) if u != url and u in new_urls]
@@ -645,6 +671,12 @@ class BackdropDialog(QDialog):
         self.quality.setToolTip("Applies to live streams (Twitch, YouTube Live, etc.). Regular YouTube videos adjust automatically.")
         self.quality.currentIndexChanged.connect(self.set_quality)
 
+        has_helper = os.path.exists(live.helper_path(ADDON_DIR))
+        self.helper_btn = QPushButton("yt-dlp Installed (Update)" if has_helper else "Download yt-dlp Helper (~3 MB)")
+        self.helper_btn.setAutoDefault(False)
+        self.helper_btn.setToolTip("Free helper needed for Twitch, Kick, and many live webcams")
+        self.helper_btn.clicked.connect(self.download_helper)
+
         browse_btn = QPushButton("Browse…")
         browse_btn.setAutoDefault(False)
         browse_btn.setToolTip("Search or browse in Anki to pick a video or stream")
@@ -674,6 +706,7 @@ class BackdropDialog(QDialog):
         form.addRow("Study card", self.labelled(self.plate_opacity, "Clear", "Solid"))
         form.addRow("Volume", self.volume)
         form.addRow("Stream quality", self.quality)
+        form.addRow("Stream helper", self.helper_btn)
         hint = QLabel(
             f"Plays behind your cards and on the study screen ({live.effective_note(c['quality'], max(1, len(active_urls(c))), multi_fps=c.get('multi_fps', 'auto'))}). "
             "Edge tab has quick controls. Hold P to peek."
@@ -705,6 +738,29 @@ class BackdropDialog(QDialog):
 
     def set_quality(self) -> None:
         set_quality(self.quality.currentData())
+
+    def download_helper(self) -> None:
+        self.helper_btn.setEnabled(False)
+        self.helper_btn.setText("Downloading yt-dlp…")
+
+        def done(fut):
+            try:
+                fut.result()
+            except Exception:
+                if _dialog is self:
+                    self.helper_btn.setEnabled(True)
+                    self.helper_btn.setText("Download yt-dlp Helper (~3 MB)")
+                tooltip("Couldn't download yt-dlp right now. Check your internet connection.", period=5000)
+                return
+            _not_live.clear()
+            _declined_urls.clear()
+            if _dialog is self:
+                self.helper_btn.setEnabled(True)
+                self.helper_btn.setText("yt-dlp Installed ✓ (Update)")
+            tooltip("yt-dlp downloaded! Ready for live streams.", period=4000)
+            refresh()
+
+        mw.taskman.run_in_background(lambda: live.download_helper(ADDON_DIR), done)
 
     def play(self) -> None:
         url = self.link.text().strip()
