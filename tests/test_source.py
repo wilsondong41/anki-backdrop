@@ -276,7 +276,8 @@ assert "&start=120" in st_times["streams"][0]["src"] and "&start=345" in st_time
 # Live status: yt-dlp answers and errors -> green/red/none, cached for a few minutes.
 import time as _t
 assert live.classify({"is_live": True}) == "live"
-assert live.classify({"live_status": "was_live"}) == "offline"
+assert live.classify({"live_status": "was_live"}) == ""  # a recording of a finished broadcast plays like a video
+assert live.classify({"live_status": "is_upcoming"}) == "offline"
 assert live.classify({"live_status": "not_live", "duration": 300}) == ""
 assert live.classify(Exception("ERROR: [twitch:stream] lofi: The channel is not currently live")) == "offline"
 assert live.classify(Exception("ERROR: Room is currently offline")) == "offline"
@@ -321,4 +322,18 @@ assert live.effective_note("720", 1) == "720p"
 store["multi_fps"] = 30
 assert ns["state"](True)["fps"] == "30"
 store["multi_fps"] = "auto"
+# Audit fixes: direct files are keyed by the saved link; status line uses the converter's frame rate; quick config.
+live._ensure_mpv = lambda q="auto": "auto"
+live.address = lambda link: "http://127.0.0.1:1/t/x.webm"
+live.register_direct("example.com/clip.mp4", video="https://example.com/clip.mp4")
+assert live.ready("example.com/clip.mp4") and live.vod("example.com/clip.mp4").get("vod") is True
+assert live._streams[live._links["example.com/clip.mp4"]][0] == "https://example.com/clip.mp4"
+live.forget("example.com/clip.mp4")
+store["multi_fps"] = 50
+assert ns["_fps_choice"](store) == "45" and "45 fps" in ns["state"](True)["auto_note"], ns["state"](True)["auto_note"]
+store["multi_fps"] = "auto"
+store["panel"] = True
+assert ns["quick_conf"]()["panel"] is True
+ns["save"](panel=False)
+assert ns["quick_conf"]()["panel"] is False  # saving refreshes the cached copy at once
 print("ok")

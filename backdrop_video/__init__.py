@@ -83,10 +83,25 @@ _saved_position = position
 _positions = {}  # url -> float seconds into each active video slot
 
 
+_quick = (0.0, None)  # (when read, config) for the app-wide key/mouse filter, which runs on every click and key repeat
+
+
+def quick_conf() -> dict:
+    """conf() re-reads two JSON files from disk; the event filter uses this copy (refreshed every 2 s and on save)."""
+    global _quick
+    at, c = _quick
+    if c is None or time.monotonic() - at > 2:
+        c = conf()
+        _quick = (time.monotonic(), c)
+    return c
+
+
 def save(**changes) -> None:
+    global _quick
     c = conf()
     c.update(changes)
     mw.addonManager.writeConfig(__name__, c)
+    _quick = (0.0, None)
 
 
 def source(url: str, start: int, paused: bool = False) -> dict:
@@ -447,7 +462,7 @@ def state(plate: bool) -> dict:
     s["live_status"] = {u: st for u in _saved_links(c) if (st := live.cached_status(u))}
     s["peek"] = bool(getattr(globals().get("_peek_filter"), "_peeking", False))
     s["auto_note"] = live.effective_note(
-        c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
+        c["quality"], max(1, len(urls)), multi_fps=_fps_choice(c),
         fps_list=live.active_fps(urls) if c["on"] else None,
     )
     s.update(on=bool(c["on"] and urls), plate=plate, lite=software_rendering(), streams=[])
@@ -560,7 +575,7 @@ def on_js_message(handled, message, context):
         except ValueError:
             urls = []
         if isinstance(urls, list):
-            check_live([u for u in urls if isinstance(u, str)][:20])
+            check_live([u for u in urls if isinstance(u, str)][:60])
         return True, None
     if message == "backdrop:clip":
         mw.web.eval("window.backdrop && backdrop.offer(%s)" % json.dumps(clipboard_link()))
@@ -662,8 +677,9 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
 
     def task():
         if use_direct:
+            # Keyed by the link as saved (so ready()/state() find it); mpv gets the full https:// address.
             return live.register_direct(
-                parsed_src if direct else url, quality, stream_count=stream_count, cap_fps=cap_fps, multi_fps=multi_fps
+                url, quality, stream_count=stream_count, cap_fps=cap_fps, multi_fps=multi_fps, video=parsed_src
             )
         live.download_helper(ADDON_DIR, if_missing=True)
         try:
@@ -755,7 +771,7 @@ def check_live(urls: list) -> None:
     saved = _saved_links(conf())  # card scripts can send this message too; only the user's own saved links are checked
     todo = [u for u in urls if u in saved and u.startswith(("http://", "https://")) and u not in _live_checking
             and source(u, 0)["kind"] in ("page", "youtube") and not LIVE_MEDIA.search(urlparse(u).path)
-            and live.cached_status(u) is None]
+            and live.cached_status(u) is None][:20]  # at most 20 new lookups per ask (one a minute while the panel is open)
     if not todo:
         return
     if _live_pool is None:
@@ -890,15 +906,20 @@ def set_fps(choice: str) -> None:
             _dialog.fps.blockSignals(True)
             _dialog.fps.setCurrentIndex(idx)
             _dialog.fps.blockSignals(False)
-    if c["on"]:
-        to_reload = [u for u in active_urls(c) if live.ready(u)]
-        for u in to_reload:
-            live.forget(u)
+    _restart_converted(c)
+
+
+def _restart_converted(c: dict) -> None:
+    """Converted streams (live, or other sites' videos) restart with the new quality or frame rate."""
+    if not c["on"]:
         refresh()
-        for u in to_reload:
-            go_live(u, quiet=True)
-    else:
-        refresh()
+        return
+    to_reload = [u for u in active_urls(c) if live.ready(u)]
+    for u in to_reload:
+        live.forget(u)
+    refresh()
+    for u in to_reload:
+        go_live(u, quiet=True)
 
 
 def set_quality(quality: str) -> None:
@@ -914,13 +935,7 @@ def set_quality(quality: str) -> None:
             _dialog.quality.blockSignals(True)
             _dialog.quality.setCurrentIndex(idx)
             _dialog.quality.blockSignals(False)
-    if c["on"]:
-        to_reload = [u for u in active_urls(c) if live.ready(u)]
-        for u in to_reload:
-            live.forget(u)
-        refresh()
-        for u in to_reload:
-            go_live(u)
+    _restart_converted(c)
 
 
 def apply(changes: dict) -> None:
@@ -1272,7 +1287,7 @@ class BackdropDialog(QDialog):
             self.off.setEnabled(bool(c["on"]))
             urls = active_urls(c)
             note = live.effective_note(
-                c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
+                c["quality"], max(1, len(urls)), multi_fps=_fps_choice(c),
                 fps_list=live.active_fps(urls) if c["on"] else None,
             )
             self.status_hint.setText(
@@ -1877,7 +1892,7 @@ def _install_peek_filter() -> None:
 
         def eventFilter(self, obj, event):
             t = event.type()
-            if t == QEvent.Type.MouseButtonPress and mw.state in ("review", "overview") and conf()["panel"]:
+            if t == QEvent.Type.MouseButtonPress and mw.state in ("review", "overview") and quick_conf()["panel"]:
                 bottom = getattr(mw, "bottomWeb", None)
                 if bottom is not None and self._in_widget(obj, bottom):
                     apply({"panel": False})
@@ -1891,7 +1906,7 @@ def _install_peek_filter() -> None:
                 return False
             in_web = self._in_widget(mw.app.focusWidget(), mw.web)
             # Focus inside a backdrop website: the key would go to that site, so Python handles P and keeps it from the site.
-            swallow = in_web and _web_focus == "frame" and mw.state in ("review", "overview") and conf()["on"]
+            swallow = in_web and _web_focus == "frame" and mw.state in ("review", "overview") and quick_conf()["on"]
             if event.isAutoRepeat():
                 return swallow
             if t == QEvent.Type.KeyRelease:
@@ -1901,7 +1916,7 @@ def _install_peek_filter() -> None:
                 return swallow
             if event.modifiers() not in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
                 return False
-            if mw.state not in ("review", "overview") or not conf()["on"] or mw.app.activeWindow() is not mw:
+            if mw.state not in ("review", "overview") or not quick_conf()["on"] or mw.app.activeWindow() is not mw:
                 return False
             fw = mw.app.focusWidget()
             if isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):

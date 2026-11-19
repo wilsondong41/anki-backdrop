@@ -657,4 +657,34 @@ assert fps_res["titled"] is True, fps_res
 assert fps_res["n"] == 6 and fps_res["before"] == ["30"] and fps_res["after"] == ["24"], fps_res
 assert fps_res["sent"] == ['backdrop:set:{"fps":"24"}'], fps_res
 
+# Audit fixes in the panel: folder buttons count live links, closed folders are asked about, unknown length hides the slider,
+# and a backdrop website that grabs the keyboard hands it back to the card.
+audit = _rt_exec("""(() => {
+  window._cfg.folders = [{name: "Cams", items: [{url: "https://cams.example/x", title: "X"}, {url: "https://cams.example/y", title: "Y"}]}];
+  window._cfg.live_status = {"https://cams.example/x": "live", "https://cams.example/y": "offline"};
+  window._cfg.fps = "auto";
+  backdrop.start(window._cfg);
+  const pill = [...document.querySelectorAll("#bd-panel .bd-folder-pill")].find((p) => p.dataset.folderName === "Cams");
+  return {pillDot: !!(pill && pill.querySelector(".bd-live-dot.bd-is-live")), pillTitle: pill && pill.title};
+})()""")
+assert audit == {"pillDot": True, "pillTitle": "1 live now"}, audit
+asked = _rt_exec("""(() => { window._sent = []; document.querySelector("#bd-panel .bd-tab").click(); document.querySelector("#bd-panel .bd-tab").click();
+  const m = window._sent.find((x) => x.startsWith("backdrop:livecheck:")); return m ? JSON.parse(m.slice(19)) : null; })()""")
+assert asked and "https://cams.example/y" in asked, asked
+noslider = _rt_exec("""(() => {
+  const c = Object.assign({}, window._cfg, {streams: [{url:"https://vimeo.com/2", kind:"video", src:"http://127.0.0.1:9/t/b.webm", start:0, live:true, vod:true, duration:0, title:"NoLen"}],
+    urls: ["https://vimeo.com/2"], url: "https://vimeo.com/2"});
+  backdrop.start(c);
+  const ctl = document.querySelector("#bd-panel [data-tab=controls]"); ctl && ctl.click();
+  document.querySelector("#bd-panel .bd-slot-row .bd-seekable").click();
+  const row = document.querySelector("#bd-panel .bd-slot-row");
+  return {open: row.classList.contains("bd-seek-open"), slider: !!row.querySelector(".bd-slot-range"), skips: row.querySelectorAll(".bd-skip-btn").length};
+})()""")
+assert noslider == {"open": True, "slider": False, "skips": 2}, noslider
+_rt_exec("""(() => { const c = Object.assign({}, window._cfg); backdrop.start(c);
+  window._bf2 = document.querySelectorAll("#bd-layer iframe")[0]; _bf2.focus(); return 1; })()""")
+loop_f = QEventLoop(); QTimer.singleShot(200, loop_f.quit); loop_f.exec()
+focus_back = _rt_exec("document.activeElement && document.activeElement.tagName")
+assert focus_back != "IFRAME", focus_back
+
 print("web ok")

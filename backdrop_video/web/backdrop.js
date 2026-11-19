@@ -973,6 +973,13 @@ window.backdrop = (() => {
         p.dataset.folderName = f.name;
         const count = (f.items || []).length;
         p.textContent = `${f.name} (${count})`;
+        const liveN = (f.items || []).filter((it) => cfg.live_status && cfg.live_status[it.url] === "live").length;
+        if (liveN) {
+          const d = document.createElement("span");
+          d.className = "bd-live-dot bd-is-live";
+          p.prepend(d);
+          p.title = `${liveN} live now`;
+        }
         pills.appendChild(p);
       }
       box.appendChild(pills);
@@ -1232,7 +1239,9 @@ window.backdrop = (() => {
               range.blur();
             });
             range.addEventListener("pointerup", () => range.blur());
-            seekBar.append(seekHead, range);
+            // Length unknown (some converted videos): only the ±10 s buttons, no slider that would map to the wrong time.
+            if (s.duration > 0) seekBar.append(seekHead, range);
+            else seekBar.append(seekHead);
             row.appendChild(seekBar);
           } else {
             const starBtn = document.createElement("button");
@@ -1345,7 +1354,11 @@ window.backdrop = (() => {
     for (const b of panel.querySelectorAll(".bd-recent .bd-item, .bd-folder-body .bd-item")) {
       if (b.dataset.url && !urls.includes(b.dataset.url)) urls.push(b.dataset.url);
     }
-    if (urls.length) send("backdrop:livecheck:" + JSON.stringify(urls.slice(0, 20)));
+    // Then links in closed folders, so their buttons can show "live now" (Python skips ones it checked recently).
+    for (const f of cfg.folders || []) {
+      for (const it of f.items || []) if (it.url && !urls.includes(it.url)) urls.push(it.url);
+    }
+    if (urls.length) send("backdrop:livecheck:" + JSON.stringify(urls.slice(0, 60)));
   }
   setInterval(() => askLive(false), 60000);
   function liveStatus(map) {
@@ -1387,6 +1400,11 @@ window.backdrop = (() => {
       if (chip) chip.textContent = (s.duration > 0 || s.time > 0) ? fmtTime(s.time) : "⏱";
       const range = r.querySelector(".bd-slot-range");
       const timeLbl = r.querySelector(".bd-slot-time");
+      if (!range && timeLbl && s.duration > 0 && r.classList.contains("bd-seek-open") && !s.seeking) {
+        setTimeout(() => update(true), 0);  // the length just became known: draw the slider
+        return;
+      }
+      if (timeLbl && !range && !s.seeking) timeLbl.textContent = fmtTime(s.time);
       if (range && timeLbl && !s.seeking) {
         const max = Math.max(1, Math.floor(s.duration || 100));
         range.max = String(max);
@@ -1435,7 +1453,13 @@ window.backdrop = (() => {
   // so it needs to know where focus is: in a text box (P types), in a backdrop frame, or on the card.
   let focusKind = null;  // null: not reported yet, so a reloaded page always tells Python once
   function reportFocus() {
-    const a = document.activeElement;
+    let a = document.activeElement;
+    if (a && a.tagName === "IFRAME" && a.closest("#bd-layer")) {
+      // A backdrop website grabbed the keyboard (sites can't be clicked, so it focused itself): hand it back to the card,
+      // so Space, the answer keys and P keep working. Python still catches P if this ever fails.
+      try { a.blur(); window.focus(); } catch (_) {}
+      a = document.activeElement;
+    }
     const k = isEditable(a) ? "typing" : (a && a.tagName === "IFRAME" && a.closest("#bd-layer") ? "frame" : "");
     if (k !== focusKind) {
       focusKind = k;

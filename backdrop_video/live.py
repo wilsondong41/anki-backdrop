@@ -30,7 +30,7 @@ _streams = {}  # stream id -> (video url, audio url or None, http headers dict)
 _fps = {}  # page link -> detected/effective integer fps
 _procs = set()  # running converters; mpv outlives Anki unless stopped
 _meta = {}  # page link -> {"vod": bool, "duration": float}; vod = a normal video (can seek), not a live stream
-LIVE_TTL, OTHER_TTL = 180, 3600  # seconds a live/offline answer, or a "not a stream" answer, is kept
+LIVE_TTL, OTHER_TTL = 180, 86400  # seconds a live/offline answer, or a "not a stream" answer, is kept
 _status = {}  # page link -> (status, checked at); status "live", "offline" or "" (not a stream / unknown)
 OFFLINE_ERROR = re.compile(
     r"offline|not (currently )?live|no longer live|isn't live|is not live|has ended|stream (has )?ended|"
@@ -122,7 +122,7 @@ def _format_fps_list(fps_list) -> str:
 
 
 def adaptive_fps(stream_count: int = 1, video_help: str = "", multi_fps="auto") -> int:
-    """Pick an FPS cap (>=30, or 0 for uncapped) using hardware cores, stream count, and optional multi_fps override."""
+    """Pick an FPS cap (15-120 when chosen, 30-60 on Auto, or 0 for uncapped) using hardware cores, stream count, and optional multi_fps override."""
     if isinstance(multi_fps, (int, float)) and not isinstance(multi_fps, bool):
         val = int(multi_fps)
         return 0 if val <= 0 else max(15, min(120, val))
@@ -168,14 +168,17 @@ def effective_note(quality: str = "auto", stream_count: int = 1, multi_fps="auto
     return label
 
 
-def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap_fps: bool = False, multi_fps="auto") -> str:
-    """Register a direct stream/video URL (.m3u8, .mpd, H.264 .mp4) for mpv-to-WebM conversion without yt-dlp."""
+def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap_fps: bool = False, multi_fps="auto",
+                    video: str = None) -> str:
+    """Register a direct stream/video URL (.m3u8, .mpd, H.264 .mp4) for mpv-to-WebM conversion without yt-dlp.
+    link is the key the add-on looks it up by (as the user saved it); video is the full address mpv opens."""
     q = _ensure_mpv(quality)
     vhelp = (_codec_help or ("", ""))[0]
     fps_cap = adaptive_fps(stream_count, vhelp, multi_fps=multi_fps) if (cap_fps or q == "auto") else 0
-    _store_stream(link, link, None, {}, q, max_fps=fps_cap)
+    video = video or link
+    _store_stream(link, video, None, {}, q, max_fps=fps_cap)
     # A plain video file can restart at any time; a .m3u8/.mpd manifest may be live, so it can't.
-    path = link.split("?", 1)[0].lower()
+    path = video.split("?", 1)[0].lower()
     with _lock:
         _meta[link] = {"vod": not path.endswith((".m3u8", ".mpd")), "duration": 0.0}
     return ""
@@ -245,8 +248,8 @@ def classify(info_or_error) -> str:
     status = info.get("live_status")
     if info.get("is_live") or status == "is_live":
         return "live"
-    if status in ("is_upcoming", "was_live", "post_live"):
-        return "offline"
+    if status == "is_upcoming":
+        return "offline"  # scheduled, not started ("was_live"/"post_live" are recordings that play normally)
     return ""
 
 
