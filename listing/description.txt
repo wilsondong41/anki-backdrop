@@ -1,6 +1,6 @@
 **Play a soft, blurred video or live stream behind your Anki cards while you study** — instead of covering your card text with a picture-in-picture window.
 
-<img src="https://i.imgur.com/CY0QPhw.png" width="640" alt="Frosted-glass card floating over a blurred backdrop">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/1-card-backdrop.png" width="640" alt="Frosted-glass card floating over a two-stream blurred backdrop">
 
 ## What it does
 
@@ -18,7 +18,7 @@
 - **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Adaptive `30–60 fps` (or set `multi_fps` in add-on config) keeps multi-stream CPU usage low.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 
-<img src="https://i.imgur.com/9hLfxl1.png" width="640" alt="Right-edge quick controls panel with position, strength, volume and stream quality">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/2-quick-panel.png" width="640" alt="Right-edge quick controls panel with Study card slider, Break zone, 1440/4K quality pills, multi-stream mute/remove, Search popup button, and Recent delete">
 
 ## Getting started
 
@@ -26,11 +26,11 @@
 2. Paste a YouTube, Twitch, or video link and click **Play**.
 3. Use the small film-strip tab on the right edge while studying to adjust blur, volume, position, or switch recent videos.
 
-<img src="https://i.imgur.com/NYsV5RX.png" width="520" alt="Tools → Backdrop Video… dialog">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/3-settings-dialog.png" width="520" alt="Tools → Backdrop Video… dialog with Study card slider, Browse…, and Add (+)">
 
 ## Good to know
 
-- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. The first time you play a live stream, Backdrop Video offers a one-click download of the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates) and uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory. Regular YouTube videos need no extra download.
+- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. When a live or incompatible stream needs the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates), Backdrop Video prompts you (with a **Don't show this again** option) and also lets you download/update it anytime in **Tools → Backdrop Video…**. It uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory; regular YouTube videos need no extra download.
 - **Software rendering:** If Anki is set to software video rendering, blur is turned off automatically to keep CPU usage low.
 - **Requires internet:** Videos stream live over your connection and aren't downloaded offline.
 
