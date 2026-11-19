@@ -183,10 +183,18 @@ def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap
     # A plain video file can restart at any time; a .m3u8/.mpd manifest may be live, so it can't.
     path = video.split("?", 1)[0].lower()
     is_vod = not path.endswith((".m3u8", ".mpd"))
-    duration = probe_duration(video) if is_vod else 0.0
     with _lock:
-        _meta[link] = {"vod": is_vod, "duration": duration}
+        _meta[link] = {"vod": is_vod, "duration": 0.0}  # set with the stream, so a redraw meanwhile sees a normal video
+    if is_vod:
+        _set_duration(link, probe_duration(video))
     return ""
+
+
+def _set_duration(link: str, duration) -> None:
+    if isinstance(duration, (int, float)) and duration > 0:
+        with _lock:
+            if link in _meta:
+                _meta[link]["duration"] = float(duration)
 
 
 def probe_duration(url: str, headers: dict = None) -> float:
@@ -290,12 +298,12 @@ def _play_item(link: str, item: tuple, q: str, fps_cap: int, is_live: bool = Fal
     known_fps = None
     if isinstance(src_fps, (int, float)) and src_fps > 0:
         known_fps = min(round(src_fps), fps_cap) if fps_cap else round(src_fps)
-    _store_stream(link, video, audio, headers, q, max_fps=fps_cap, fps=known_fps)
-    if not is_live and not (isinstance(duration, (int, float)) and duration > 0):
-        duration = probe_duration(video, headers)  # some sites: yt-dlp gives no length
-    with _lock:
+    with _lock:  # set with the stream, so a redraw meanwhile sees a normal video
         _meta[link] = {"vod": not is_live,
                        "duration": float(duration) if isinstance(duration, (int, float)) and duration > 0 else 0.0}
+    _store_stream(link, video, audio, headers, q, max_fps=fps_cap, fps=known_fps)
+    if not is_live and not _meta.get(link, {}).get("duration"):
+        _set_duration(link, probe_duration(video, headers))  # some sites: yt-dlp gives no length
 
 
 def album(link: str) -> dict:

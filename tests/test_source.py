@@ -397,4 +397,14 @@ store["panel"] = True
 assert ns["quick_conf"]()["panel"] is True
 ns["save"](panel=False)
 assert ns["quick_conf"]()["panel"] is False  # saving refreshes the cached copy at once
+# Pausing one video: kept only for videos that are playing, cleared when a new set starts.
+store.update(on=True, url="youtu.be/aaaaaaaaaa1", urls=["youtu.be/aaaaaaaaaa1", "youtu.be/aaaaaaaaaa2"], held=[], paused=False)
+ns["apply"]({"held": ["youtu.be/aaaaaaaaaa2", "youtu.be/elsewhere", 5]})
+assert store["held"] == ["youtu.be/aaaaaaaaaa2"], store["held"]
+st = ns["state"](True)
+assert st["held"] == ["youtu.be/aaaaaaaaaa2"] and "autoplay=0" in st["streams"][1]["src"] and "autoplay=1" in st["streams"][0]["src"]
+ns["remove_url"]("youtu.be/aaaaaaaaaa1")
+assert store["held"] == ["youtu.be/aaaaaaaaaa2"]
+ns["play_url"]("youtu.be/aaaaaaaaaa3")
+assert store["held"] == []
 print("ok")

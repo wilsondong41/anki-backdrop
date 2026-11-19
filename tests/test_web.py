@@ -713,6 +713,53 @@ assert album == {"label": "Video 3 of 14", "msgs": [{"url": "https://albums.exam
 loop_r = QEventLoop(); QTimer.singleShot(5600, loop_r.quit); loop_r.exec()  # the page reports times every 5 s
 yt_saved = _rt_exec("""(() => { window.pycmd = window._oldPy; return window._ytSent.filter((m) => /^backdrop:(slot_)?time:/.test(m)); })()""")
 assert yt_saved == [], yt_saved
+# Skipping in a converted video keeps its last frame on screen until the new one shows (no blank flash);
+# "pause just this video" (2+ videos) freezes that one on its frame while the other keeps playing.
+hold = _rt_exec("""(() => {
+  CanvasRenderingContext2D.prototype.drawImage = function () {};  // no real video frames in this test page
+  const vid = (n) => ({url: "https://albums.example/v" + n, kind: "video", src: "http://127.0.0.1:9/t/v" + n + ".webm", start: 30, live: true, vod: true, duration: 600, title: "V" + n});
+  const c = Object.assign({}, window._cfg, {paused: false, held: [], streams: [vid(1), vid(2)], urls: ["https://albums.example/v1", "https://albums.example/v2"], url: "https://albums.example/v1"});
+  backdrop.start(c);
+  const vids = [...document.querySelectorAll("#bd-layer video")];
+  for (const v of vids) {
+    Object.defineProperty(v, "readyState", {get: () => 4, configurable: true});
+    Object.defineProperty(v, "videoWidth", {get: () => 640, configurable: true});
+    Object.defineProperty(v, "videoHeight", {get: () => 360, configurable: true});
+    v.requestVideoFrameCallback = (cb) => { v._frameCb = cb; return 1; };
+  }
+  const row1 = () => document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://albums.example/v1']");
+  row1().querySelector(".bd-seekable").click();
+  row1().querySelector("[data-act='skip-slot'][data-delta='10']").click();
+  const slot1 = vids[0].parentElement;
+  const stillDuringSkip = !!slot1.querySelector(".bd-still:not([hidden])");
+  const newSrc = vids[0].getAttribute("src");
+  vids[0]._frameCb && vids[0]._frameCb();
+  const stillAfterFrame = !!slot1.querySelector(".bd-still:not([hidden])");
+  let ct = 12;
+  Object.defineProperty(vids[0], "currentTime", {get: () => ct, set: () => {}, configurable: true});
+  vids[0].dispatchEvent(new Event("timeupdate"));  // 40 + 12 = 0:52
+  row1().querySelector(".bd-seek-close").click();
+  const sent = []; const old = window.pycmd; window.pycmd = (m) => sent.push(m);
+  const btn = row1().querySelector("[data-act='hold-slot']");
+  const btnTitle = btn && btn.title;
+  btn.click();
+  window.pycmd = old;
+  ct = 0;
+  vids[0].dispatchEvent(new Event("timeupdate"));  // fired by the unload: must not reset the time
+  const chipAfterPause = row1().querySelector(".bd-slot-chip").textContent;
+  const setMsg = sent.map((m) => m.startsWith("backdrop:set:") ? JSON.parse(m.slice(13)) : null).find((m) => m && m.held);
+  return {stillDuringSkip, newSrc, stillAfterFrame, btnTitle,
+          heldSaved: setMsg && setMsg.held, frozenShown: !!slot1.querySelector(".bd-still:not([hidden])"),
+          frozenUnloaded: !vids[0].getAttribute("src"), otherPlaying: !!vids[1].getAttribute("src"),
+          playBtn: row1().querySelector("[data-act='hold-slot']").title, chipAfterPause};
+})()""")
+assert hold == {"stillDuringSkip": True, "newSrc": "http://127.0.0.1:9/t/v1.webm?start=40", "stillAfterFrame": False,
+                "btnTitle": "Pause just this video (the others keep playing)", "heldSaved": ["https://albums.example/v1"],
+                "frozenShown": True, "frozenUnloaded": True, "otherPlaying": True, "playBtn": "Play this video",
+                "chipAfterPause": "0:52"}, hold
+one = _rt_exec("""(() => { const c = Object.assign({}, window._cfg, {paused: false, held: [], streams: [{url: "https://albums.example/v1", kind: "video", src: "http://127.0.0.1:9/t/v1.webm", live: true, vod: true, duration: 600, title: "V1"}], urls: ["https://albums.example/v1"], url: "https://albums.example/v1"});
+  backdrop.start(c); return !!document.querySelector("#bd-panel [data-act='hold-slot']"); })()""")
+assert one is False  # one video: the main Pause does it
 _rt_exec("""(() => { const c = Object.assign({}, window._cfg); backdrop.start(c);
   window._bf2 = document.querySelectorAll("#bd-layer iframe")[0]; _bf2.focus(); return 1; })()""")
 loop_f = QEventLoop(); QTimer.singleShot(200, loop_f.quit); loop_f.exec()

@@ -58,23 +58,23 @@
 }
 
 /* Line multi-video edges up flush at the center without cropping (contain preserves the full frame). */
-#bd-layer.bd-n2 > .bd-slot:first-child > video { object-position: right center; }
-#bd-layer.bd-n2 > .bd-slot:nth-child(2) > video { object-position: left center; }
-#bd-layer.bd-n3 > .bd-slot:first-child > video { object-position: right bottom; }
-#bd-layer.bd-n3 > .bd-slot:nth-child(2) > video { object-position: left bottom; }
-#bd-layer.bd-n3 > .bd-slot:nth-child(3) > video { object-position: center top; }
-#bd-layer.bd-n4 > .bd-slot:nth-child(1) > video { object-position: right bottom; }
-#bd-layer.bd-n4 > .bd-slot:nth-child(2) > video { object-position: left bottom; }
-#bd-layer.bd-n4 > .bd-slot:nth-child(3) > video { object-position: right top; }
-#bd-layer.bd-n4 > .bd-slot:nth-child(4) > video { object-position: left top; }
+#bd-layer.bd-n2 > .bd-slot:first-child > video, #bd-layer.bd-n2 > .bd-slot:first-child > .bd-still { object-position: right center; }
+#bd-layer.bd-n2 > .bd-slot:nth-child(2) > video, #bd-layer.bd-n2 > .bd-slot:nth-child(2) > .bd-still { object-position: left center; }
+#bd-layer.bd-n3 > .bd-slot:first-child > video, #bd-layer.bd-n3 > .bd-slot:first-child > .bd-still { object-position: right bottom; }
+#bd-layer.bd-n3 > .bd-slot:nth-child(2) > video, #bd-layer.bd-n3 > .bd-slot:nth-child(2) > .bd-still { object-position: left bottom; }
+#bd-layer.bd-n3 > .bd-slot:nth-child(3) > video, #bd-layer.bd-n3 > .bd-slot:nth-child(3) > .bd-still { object-position: center top; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(1) > video, #bd-layer.bd-n4 > .bd-slot:nth-child(1) > .bd-still { object-position: right bottom; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(2) > video, #bd-layer.bd-n4 > .bd-slot:nth-child(2) > .bd-still { object-position: left bottom; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(3) > video, #bd-layer.bd-n4 > .bd-slot:nth-child(3) > .bd-still { object-position: right top; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(4) > video, #bd-layer.bd-n4 > .bd-slot:nth-child(4) > .bd-still { object-position: left top; }
 
 @media (max-aspect-ratio: 1/1) {
   #bd-layer.bd-n2 {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(2, minmax(0, 1fr));
   }
-  #bd-layer.bd-n2 > .bd-slot:first-child > video { object-position: center bottom; }
-  #bd-layer.bd-n2 > .bd-slot:nth-child(2) > video { object-position: center top; }
+  #bd-layer.bd-n2 > .bd-slot:first-child > video, #bd-layer.bd-n2 > .bd-slot:first-child > .bd-still { object-position: center bottom; }
+  #bd-layer.bd-n2 > .bd-slot:nth-child(2) > video, #bd-layer.bd-n2 > .bd-slot:nth-child(2) > .bd-still { object-position: center top; }
   #bd-layer.bd-n3 {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(3, minmax(0, 1fr));
@@ -82,9 +82,9 @@
   #bd-layer.bd-n3 > .bd-slot:last-child {
     grid-column: auto;
   }
-  #bd-layer.bd-n3 > .bd-slot > video { object-position: center center; }
-  #bd-layer.bd-n3 > .bd-slot:first-child > video { object-position: center bottom; }
-  #bd-layer.bd-n3 > .bd-slot:last-child > video { object-position: center top; }
+  #bd-layer.bd-n3 > .bd-slot > video, #bd-layer.bd-n3 > .bd-slot > .bd-still { object-position: center center; }
+  #bd-layer.bd-n3 > .bd-slot:first-child > video, #bd-layer.bd-n3 > .bd-slot:first-child > .bd-still { object-position: center bottom; }
+  #bd-layer.bd-n3 > .bd-slot:last-child > video, #bd-layer.bd-n3 > .bd-slot:last-child > .bd-still { object-position: center top; }
 }
 
 @media (max-aspect-ratio: 3/4) {
@@ -92,7 +92,7 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(4, minmax(0, 1fr));
   }
-  #bd-layer.bd-n4 > .bd-slot > video { object-position: center center; }
+  #bd-layer.bd-n4 > .bd-slot > video, #bd-layer.bd-n4 > .bd-slot > .bd-still { object-position: center center; }
 }
 
 #bd-layer .bd-slot {
@@ -1149,3 +1149,7 @@
 .bd-album{display:flex;align-items:center;gap:6px;margin-top:6px}
 .bd-album-lbl{flex:1;text-align:center;font-size:12px;opacity:.85}
 .bd-album-btn{min-width:34px;font-size:16px;line-height:1}
+/* The last frame of a video that's reloading or paused, laid exactly over it (see holdFrame in backdrop.js). */
+#bd-layer .bd-slot > .bd-still { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+#bd-layer .bd-slot > .bd-still[hidden] { display: none; }
+.bd-slot-ico.bd-held { color: var(--bd-accent, #60a5fa); }

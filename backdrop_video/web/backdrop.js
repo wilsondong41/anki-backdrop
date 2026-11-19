@@ -10,6 +10,7 @@ window.backdrop = (() => {
   const send = (msg) => { if (typeof pycmd === "function") pycmd(msg); };
   const set = (changes) => send("backdrop:set:" + JSON.stringify(changes));
   const isMuted = (url) => !!(cfg && Array.isArray(cfg.muted) && cfg.muted.includes(url));
+  const isHeld = (url) => !!(cfg && Array.isArray(cfg.held) && cfg.held.includes(url));  // paused on its own
 
   function normalizeStreams(next) {
     if (!next || !next.on) return [];
@@ -67,7 +68,7 @@ window.backdrop = (() => {
     const el = document.createElement("div");
     el.className = "bd-slot bd-kind-" + (spec.kind || "page");
     const slot = {
-      url: spec.url, kind: spec.kind, src: spec.src, start: spec.start || 0,
+      url: spec.url, kind: spec.kind, src: spec.src, start: spec.start || 0, held: isHeld(spec.url), still: null,
       live: !!spec.live, title: spec.title || "", fps: spec.fps || 0, measuredFps: 0, fpsSample: null,
       el, media: null, ytSynced: false, isLiveStream: false, duration: 0, time: spec.start || 0, seeking: false,
       // A converted normal video (not a live stream): it restarts at a time to seek, so its clock is offset + currentTime.
@@ -80,8 +81,17 @@ window.backdrop = (() => {
     let media;
     if (spec.kind === "video") {
       media = document.createElement("video");
-      Object.assign(media, { autoplay: !cfg.paused, loop: !spec.live, playsInline: true });
-      if (!(spec.live && cfg.paused) && spec.src) media.src = spec.src;
+      const still = cfg.paused || slot.held;
+      Object.assign(media, { autoplay: !still, loop: !spec.live, playsInline: true });
+      // A paused converted stream loads just long enough to show its frame, then lets the converter stop.
+      slot.priming = !!(spec.live && still);
+      if (spec.src) media.src = spec.src;
+      media.addEventListener("loadeddata", () => {
+        if (!slot.priming) return;
+        slot.priming = false;
+        holdFrame(slot);
+        unload(slot);
+      });
       media.addEventListener("playing", () => {
         if (typeof media.getVideoPlaybackQuality === "function") {
           slot.fpsSample = { frames: media.getVideoPlaybackQuality().totalVideoFrames || 0, t: performance.now() };
@@ -108,6 +118,7 @@ window.backdrop = (() => {
         }
       });
       media.addEventListener("timeupdate", () => {
+        if (!media.getAttribute("src") || slot.priming) return;  // unloaded (paused) or only showing a frame: keep the time
         if ((!slot.live || slot.vod) && !slot.seeking && !(slots[0] === slot && seeking)) {
           slot.time = slot.offset + media.currentTime;
           if (slots[0] === slot) time = slot.time;
@@ -131,6 +142,11 @@ window.backdrop = (() => {
       media.src = spec.kind === "youtube" ? spec.src + "&cc_load_policy=0&cc_lang_pref=none" : spec.src;
       media.allow = "autoplay; encrypted-media";
       media.tabIndex = -1;
+      if (spec.kind === "page") {
+        media.addEventListener("load", () => {
+          if (cfg.paused || slot.held) setTimeout(() => pauseSlot(slot), 1500);  // after the site starts its video
+        });
+      }
       if (spec.kind === "youtube") {
         media.addEventListener("load", () => {
           ytSend(slot, { event: "listening", id: "bd", channel: "widget" });
@@ -165,6 +181,9 @@ window.backdrop = (() => {
         const existing = prev[idx];
         existing.title = spec.title || existing.title;
         if (spec.fps) existing.fps = spec.fps;
+        existing.held = isHeld(existing.url);
+        // A converted video's length can arrive after it started (asked from mpv): the slider appears then.
+        if (existing.vod && spec.duration > 0 && !(existing.duration > 0)) existing.duration = spec.duration;
         if (existing.kind !== "youtube") {
           existing.album = spec.album && spec.album.count > 1 ? spec.album : null;
           existing.albumBusy = false;  // a switch that failed leaves the same video: its picker works again
@@ -175,7 +194,14 @@ window.backdrop = (() => {
       }
     }
     for (let i = 0; i < prev.length; i++) {
-      if (!used.has(i)) unmountSlot(prev[i]);
+      if (used.has(i)) continue;
+      // The same link reloaded as a new video (album next/previous, new quality): keep its last frame meanwhile.
+      const heir = nextSlots.find((n) => n.url === prev[i].url && !prev.includes(n));
+      if (heir && heir.media && heir.media.tagName === "VIDEO") {
+        holdFrame(heir, prev[i].media);
+        releaseFrame(heir);
+      }
+      unmountSlot(prev[i]);
     }
     // Keep existing iframe parents intact when order hasn't changed so iframes never reload unnecessarily.
     for (let i = 0; i < nextSlots.length; i++) {
@@ -289,16 +315,80 @@ window.backdrop = (() => {
 
   function setPaused(paused) {
     cfg.paused = paused;
+    const wasHeld = slots.filter((s) => s.held);
+    if (!paused) {
+      for (const s of slots) s.held = false;
+      cfg.held = [];
+    }
     for (const s of slots) {
       if (!s.media) continue;
-      // A paused live stream is unloaded, which stops its converter; resuming rejoins it where it is now.
-      if (s.live && s.vod && !paused) restartAt(s, s.time || 0);
-      else if (s.live) paused ? (s.media.removeAttribute("src"), s.media.load()) : (s.media.src = s.src);
-      else if (s.kind === "video") paused ? s.media.pause() : s.media.play().catch(() => {});
-      else if (s.kind === "youtube") ytSend(s, { event: "command", func: paused ? "pauseVideo" : "playVideo", args: [] });
+      if (paused) { if (!wasHeld.includes(s)) pauseSlot(s); }
+      else resumeSlot(s);
     }
-    set({ paused });
+    set(paused ? { paused } : { paused, held: [] });
     update();
+  }
+
+  // One video paused on its own (the others keep playing); it keeps showing its frame.
+  function setHeld(s, held) {
+    s.held = held;
+    const cur = new Set(cfg.held || []);
+    held ? cur.add(s.url) : cur.delete(s.url);
+    cfg.held = Array.from(cur);
+    if (!cfg.paused) held ? pauseSlot(s) : resumeSlot(s);
+    set({ held: cfg.held });
+    update();
+  }
+
+  function unload(s) {
+    s.media.removeAttribute("src");
+    s.media.load();
+  }
+
+  // A paused converted stream is unloaded, which stops its converter; its last frame stays on screen.
+  function pauseSlot(s) {
+    if (!s.media) return;
+    if (s.live) { holdFrame(s); unload(s); }
+    else if (s.kind === "video") s.media.pause();
+    else if (s.kind === "youtube") ytSend(s, { event: "command", func: "pauseVideo", args: [] });
+    else if (s.kind === "page" && s.media.contentWindow) s.media.contentWindow.postMessage({ bdBridge: "pause" }, "*");
+  }
+
+  function resumeSlot(s) {
+    if (!s.media) return;
+    if (s.live && s.vod) restartAt(s, s.time || 0);  // picks up where it was
+    else if (s.live) { s.media.src = s.src; releaseFrame(s); }  // a live stream rejoins where it is now
+    else if (s.kind === "video") s.media.play().catch(() => {});
+    else if (s.kind === "youtube") ytSend(s, { event: "command", func: "playVideo", args: [] });
+    else if (s.kind === "page" && s.media.contentWindow) s.media.contentWindow.postMessage({ bdBridge: "play" }, "*");
+  }
+
+  // A still copy of the video's current frame, shown while the video reloads (a skip, pause or resume)
+  // so the backdrop never flashes blank. Drawing a video from the local converter is allowed; nothing is read back.
+  function holdFrame(s, v = s.media) {
+    if (!v || v.tagName !== "VIDEO" || v.readyState < 2 || !v.videoWidth) return;
+    if (!s.still) {
+      s.still = document.createElement("canvas");
+      s.still.className = "bd-still";
+      s.el.appendChild(s.still);
+    }
+    s.still.width = v.videoWidth;
+    s.still.height = v.videoHeight;
+    try {
+      s.still.getContext("2d").drawImage(v, 0, 0);
+      s.still.hidden = false;
+    } catch (_) {
+      s.still.hidden = true;
+    }
+  }
+
+  // Hide the still copy once the video shows a new frame.
+  function releaseFrame(s) {
+    const v = s.media;
+    if (!s.still || s.still.hidden || !v) return;
+    const done = () => { if (!s.priming && s.still) s.still.hidden = true; };
+    if (typeof v.requestVideoFrameCallback === "function") v.requestVideoFrameCallback(done);
+    else v.addEventListener("playing", done, { once: true });
   }
 
   // Turned down while Anki plays card audio (see duck() in __init__.py) or Read Aloud speaks.
@@ -418,10 +508,10 @@ window.backdrop = (() => {
     if (!cfg || !cfg.on || cfg.paused || !slots.length) return;
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-      if ((s.live && !s.vod) || s.isLiveStream || (s.kind === "page" && !canSlotSeek(s))) continue;
+      if ((s.live && !s.vod) || s.isLiveStream || (s.kind === "page" && !canSlotSeek(s)) || s.held) continue;
       // A YouTube playlist reopens at its first video, so a later video's time isn't saved.
       if (s.kind === "youtube" && s.album && s.album.index !== s.firstIndex) continue;
-      if (s.kind === "video" && s.media) s.time = s.offset + s.media.currentTime;
+      if (s.kind === "video" && s.media && s.media.getAttribute("src") && !s.priming) s.time = s.offset + s.media.currentTime;
       if (i === 0) time = s.time;
       if (s.time > 0) {
         if (i === 0 && slots.length === 1) send("backdrop:time:" + s.time);
@@ -617,6 +707,11 @@ window.backdrop = (() => {
         if (!canSlotSeek(s)) return;
         seekOpenSlots.has(u) ? seekOpenSlots.delete(u) : seekOpenSlots.add(u);
         update(true);
+        return;
+      }
+      if (act === "hold-slot") {
+        const s = slots.find((x) => x.url === el.dataset.slotUrl);
+        if (s) setHeld(s, !s.held);
         return;
       }
       if (act === "album-slot") {
@@ -1314,7 +1409,21 @@ window.backdrop = (() => {
             rmBtn.dataset.slotUrl = s.url;
             rmBtn.title = "Remove stream";
             rmBtn.textContent = "×";
-            top.append(starBtn, muteBtn, rmBtn);
+            // Pause just this video (shown with 2+ videos; one video uses the main Pause, which also keeps its frame).
+            if (slots.length > 1 || s.held) {
+              const holdBtn = document.createElement("button");
+              holdBtn.type = "button";
+              holdBtn.className = "bd-slot-btn bd-slot-ico" + (s.held ? " bd-held" : "");
+              holdBtn.dataset.act = "hold-slot";
+              holdBtn.dataset.slotUrl = s.url;
+              const tip = s.held ? "Play this video" : "Pause just this video (the others keep playing)";
+              holdBtn.title = tip;
+              holdBtn.setAttribute("aria-label", tip);
+              holdBtn.innerHTML = svg(s.held ? "play" : "pause");
+              top.append(starBtn, holdBtn, muteBtn, rmBtn);
+            } else {
+              top.append(starBtn, muteBtn, rmBtn);
+            }
             row.appendChild(top);
           }
           slotsBox.appendChild(row);
@@ -1443,10 +1552,15 @@ window.backdrop = (() => {
   }
 
   function restartAt(s, sec) {
+    holdFrame(s);  // keep the old frame until the new one arrives (no blank flash)
     s.offset = Math.max(0, Math.floor(sec));
     s.time = s.offset;
+    const still = cfg.paused || s.held;
+    s.media.autoplay = !still;
+    s.priming = still;  // paused: show the new frame, then stop the converter
     s.media.src = s.baseSrc + (s.offset ? "?start=" + s.offset : "");
-    if (!cfg.paused) s.media.play().catch(() => {});
+    if (!still) s.media.play().catch(() => {});
+    releaseFrame(s);
   }
 
   function updateSeek() {

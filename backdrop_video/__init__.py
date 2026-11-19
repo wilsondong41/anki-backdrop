@@ -30,7 +30,7 @@ MAX_FOLDER_ITEMS = 50
 DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70,
             "true_transparency": False, "volume": 50, "time": 0, "paused": False, "picture": True,
             "panel": False, "quality": "auto", "multi_fps": "auto", "suppress_ytdlp_prompt": False,
-            "title": "", "recent": [], "folders": [], "album_pos": {}}
+            "title": "", "recent": [], "folders": [], "album_pos": {}, "held": []}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 # Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
@@ -464,6 +464,7 @@ def state(plate: bool) -> dict:
     s["folders"] = _sanitize_folders(c.get("folders"))
     s["urls"] = urls
     s["muted"] = [u for u in (c.get("muted") or []) if isinstance(u, str) and u in urls]
+    s["held"] = [u for u in (c.get("held") or []) if isinstance(u, str) and u in urls]  # videos paused on their own
     s["break_info"] = _break_info()
     s["fps"] = _fps_choice(c)
     s["live_status"] = {u: st for u in _saved_links(c) if (st := live.cached_status(u))}
@@ -478,7 +479,7 @@ def state(plate: bool) -> dict:
             _stream_spec(
                 u,
                 int(_positions.get(u, position if i == 0 else 0)),
-                c["paused"],
+                c["paused"] or u in s["held"],
                 _recent_title(c, u),
             )
             for i, u in enumerate(urls)
@@ -859,7 +860,7 @@ def play_url(url: str) -> None:
         _positions.pop(url, None)
     recent = _remember_recent(c, url)
     title = recent[0]["title"]
-    save(url=url, urls=[url], muted=[], on=True, paused=False, title=title, recent=recent)
+    save(url=url, urls=[url], muted=[], held=[], on=True, paused=False, title=title, recent=recent)
 
 
 def play_urls(urls: list) -> bool:
@@ -892,7 +893,7 @@ def play_urls(urls: list) -> bool:
         recent = _remember_recent({**c, "recent": recent}, u)
     position = float(_positions.get(cleaned[0], 0.0))
     primary = cleaned[0]
-    save(url=primary, urls=cleaned, muted=[], on=True, paused=False, title=_recent_title({**c, "recent": recent}, primary), recent=recent)
+    save(url=primary, urls=cleaned, muted=[], held=[], on=True, paused=False, title=_recent_title({**c, "recent": recent}, primary), recent=recent)
     return True
 
 
@@ -914,8 +915,9 @@ def add_url(url: str) -> bool:
     _positions.pop(url, None)
     new_urls = cur + [url]
     muted = [u for u in (c.get("muted") or []) if u != url and u in new_urls]
+    held = [u for u in (c.get("held") or []) if u != url and u in new_urls]
     recent = _remember_recent(c, url)
-    save(url=new_urls[0], urls=new_urls, muted=muted, on=True, paused=False, recent=recent)
+    save(url=new_urls[0], urls=new_urls, muted=muted, held=held, on=True, paused=False, recent=recent)
     return True
 
 
@@ -928,17 +930,18 @@ def remove_url(url: str) -> None:
     _positions.pop(url, None)
     new_urls = [u for u in cur if u != url]
     muted = [u for u in (c.get("muted") or []) if u in new_urls]
+    held = [u for u in (c.get("held") or []) if u in new_urls]
     if not new_urls:
         position = 0.0
         _positions.clear()
-        save(on=False, url="", urls=[], muted=[], title="")
+        save(on=False, url="", urls=[], muted=[], held=[], title="")
         if _break_mode:
             exit_break()
         return
     primary = new_urls[0]
     if primary != c["url"]:
         position = float(_positions.get(primary, 0.0))
-    save(url=primary, urls=new_urls, muted=muted, title=_recent_title(c, primary))
+    save(url=primary, urls=new_urls, muted=muted, held=held, title=_recent_title(c, primary))
 
 
 def set_fps(choice: str) -> None:
@@ -1043,6 +1046,9 @@ def apply(changes: dict) -> None:
     if isinstance(changes.get("muted"), list):
         active = set(active_urls())
         extra["muted"] = [u for u in changes["muted"] if isinstance(u, str) and u in active][:MAX_STREAMS]
+    if isinstance(changes.get("held"), list):
+        active = set(active_urls())
+        extra["held"] = [u for u in changes["held"] if isinstance(u, str) and u in active][:MAX_STREAMS]
     save(**flags, **numbers, **extra)
     if _dialog is not None and "true_transparency" in flags:
         _dialog.true_transparency.blockSignals(True)
@@ -1884,6 +1890,8 @@ BRIDGE_JS = r"""
     if (m.bdBridge === "seek" && isFinite(m.t) && isFinite(v.duration)) {
       v.currentTime = Math.max(0, Math.min(v.duration - 1, m.t));
     }
+    if (m.bdBridge === "pause") v.pause();  // the website keeps showing that frame
+    if (m.bdBridge === "play") v.play().catch(() => {});
     try {
       window.top.postMessage({ bdBridge: "status", time: v.currentTime || 0,
         duration: isFinite(v.duration) ? v.duration : 0, live: v.duration === Infinity }, "*");
