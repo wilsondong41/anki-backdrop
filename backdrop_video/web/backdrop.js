@@ -73,6 +73,8 @@ window.backdrop = (() => {
       // A converted normal video (not a live stream): it restarts at a time to seek, so its clock is offset + currentTime.
       vod: !!(spec.live && spec.vod), offset: spec.live && spec.vod ? Math.floor(spec.start || 0) : 0,
       baseSrc: (spec.src || "").split("?")[0], bridge: null,
+      // Several videos behind one link: {index, count}; YouTube playlists fill it in from the player.
+      album: spec.album && spec.album.count > 1 ? spec.album : null,
     };
     if (slot.vod && spec.duration > 0) slot.duration = spec.duration;
     let media;
@@ -117,7 +119,9 @@ window.backdrop = (() => {
       // (A normal video whose connection dropped part-way picks up where it was.)
       if (slot.live) media.addEventListener("ended", () => {
         if (!slot.vod) return send("backdrop:error:stream:" + slot.url);
-        seekSlotTo(slot, slot.duration && slot.time < slot.duration - 10 ? slot.time : 0);
+        const dropped = slot.duration && slot.time < slot.duration - 10;
+        if (slot.album && !dropped) return albumStep(slot, 1);  // an album plays its next video (after the last: the first)
+        seekSlotTo(slot, dropped ? slot.time : 0);
       });
     } else {
       media = document.createElement("iframe");
@@ -161,6 +165,10 @@ window.backdrop = (() => {
         const existing = prev[idx];
         existing.title = spec.title || existing.title;
         if (spec.fps) existing.fps = spec.fps;
+        if (existing.kind !== "youtube") {
+          existing.album = spec.album && spec.album.count > 1 ? spec.album : null;
+          existing.albumBusy = false;  // a switch that failed leaves the same video: its picker works again
+        }
         nextSlots.push(existing);
       } else {
         nextSlots.push(mountSlot(spec));
@@ -385,6 +393,16 @@ window.backdrop = (() => {
       }
       updateSeek();
     }
+    if (Array.isArray(info.playlist) && typeof info.playlistIndex === "number") {
+      const count = info.playlist.length;
+      const was = slot.album;
+      if (slot.firstIndex == null) slot.firstIndex = info.playlistIndex;  // the video the saved time belongs to
+      slot.album = count > 1 ? { index: Math.max(0, info.playlistIndex), count } : null;
+      if (!was !== !slot.album || (was && slot.album && (was.index !== slot.album.index || was.count !== slot.album.count))) {
+        slot.albumBusy = false;
+        if (seekOpenSlots.has(slot.url)) update(true); else updateSeek();
+      }
+    }
     // Captions are a distraction behind a card; the player loads them when playback starts.
     if (info.playerState === 1) {
       ytSend(slot, { event: "command", func: "unloadModule", args: ["captions"] });
@@ -401,6 +419,8 @@ window.backdrop = (() => {
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
       if ((s.live && !s.vod) || s.isLiveStream || (s.kind === "page" && !canSlotSeek(s))) continue;
+      // A YouTube playlist reopens at its first video, so a later video's time isn't saved.
+      if (s.kind === "youtube" && s.album && s.album.index !== s.firstIndex) continue;
       if (s.kind === "video" && s.media) s.time = s.offset + s.media.currentTime;
       if (i === 0) time = s.time;
       if (s.time > 0) {
@@ -597,6 +617,11 @@ window.backdrop = (() => {
         if (!canSlotSeek(s)) return;
         seekOpenSlots.has(u) ? seekOpenSlots.delete(u) : seekOpenSlots.add(u);
         update(true);
+        return;
+      }
+      if (act === "album-slot") {
+        const s = slots.find((x) => x.url === el.dataset.slotUrl);
+        if (s) albumStep(s, parseInt(el.dataset.delta || "0", 10));
         return;
       }
       if (act === "skip-slot") {
@@ -1165,7 +1190,7 @@ window.backdrop = (() => {
             name.dataset.slotUrl = s.url;
             name.title = isSeekOpen
               ? "Click to close time controls"
-              : ((s.title || s.url) + " — Click for timestamp & skip controls");
+              : ((s.title || s.url) + (s.album ? ` — Video ${s.album.index + 1} of ${s.album.count}. Click to pick a video, skip or jump` : " — Click for timestamp & skip controls"));
             const txt = document.createElement("span");
             txt.className = "bd-slot-title-txt";
             txt.textContent = s.title || shortLink(s.url);
@@ -1242,6 +1267,27 @@ window.backdrop = (() => {
             // Length unknown (some converted videos): only the ±10 s buttons, no slider that would map to the wrong time.
             if (s.duration > 0) seekBar.append(seekHead, range);
             else seekBar.append(seekHead);
+            if (s.album) {
+              const pick = document.createElement("div");
+              pick.className = "bd-album";
+              const mk = (delta, text, tip) => {
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "bd-slot-btn bd-skip-btn bd-album-btn";
+                b.dataset.act = "album-slot";
+                b.dataset.slotUrl = s.url;
+                b.dataset.delta = String(delta);
+                b.title = tip;
+                b.setAttribute("aria-label", tip);
+                b.textContent = text;
+                return b;
+              };
+              const lbl = document.createElement("span");
+              lbl.className = "bd-album-lbl";
+              lbl.textContent = s.albumBusy ? "Loading…" : `Video ${s.album.index + 1} of ${s.album.count}`;
+              pick.append(mk(-1, "‹", "Previous video"), lbl, mk(1, "›", "Next video"));
+              seekBar.appendChild(pick);
+            }
             row.appendChild(seekBar);
           } else {
             const starBtn = document.createElement("button");
@@ -1383,6 +1429,19 @@ window.backdrop = (() => {
   }
 
   // A converted normal video can't jump inside its stream, so the converter restarts at the new time.
+  // Next (1) or previous (-1) video of an album or YouTube playlist.
+  function albumStep(s, step) {
+    if (!s || !s.album || s.albumBusy || (step !== 1 && step !== -1)) return;
+    if (s.kind === "youtube") {
+      ytSend(s, { event: "command", func: step > 0 ? "nextVideo" : "previousVideo", args: [] });
+      return;
+    }
+    s.albumBusy = true;  // Python looks the new video up, then rebuilds this slot
+    const lbl = panel && panel.querySelector(`.bd-slot-row[data-slot-url="${CSS.escape(s.url)}"] .bd-album-lbl`);
+    if (lbl) lbl.textContent = "Loading…";
+    send("backdrop:album:" + JSON.stringify({ url: s.url, step }));
+  }
+
   function restartAt(s, sec) {
     s.offset = Math.max(0, Math.floor(sec));
     s.time = s.offset;

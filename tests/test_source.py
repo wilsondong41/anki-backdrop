@@ -325,7 +325,68 @@ store["multi_fps"] = "auto"
 # Audit fixes: direct files are keyed by the saved link; status line uses the converter's frame rate; quick config.
 live._ensure_mpv = lambda q="auto": "auto"
 live.address = lambda link: "http://127.0.0.1:1/t/x.webm"
+# A video whose length yt-dlp doesn't give (some album sites, plain .mp4) asks mpv, so the position slider shows.
+ran = []
+real_run = live.subprocess.run
+live.subprocess.run = lambda args, **k: ran.append(args) or types.SimpleNamespace(stdout="BDDUR=598.541\n")
+assert live.probe_duration("https://v.example.com/a.mp4", {"Referer": "https://x/", "User-Agent": "UA", "Cookie": "a=1"}) == 598.541
+assert "--referrer=https://x/" in ran[0] and "--user-agent=UA" in ran[0] and "--http-header-fields=Cookie: a=1" in ran[0]
+assert ran[0][-2:] == ["--", "https://v.example.com/a.mp4"]
 live.register_direct("example.com/clip.mp4", video="https://example.com/clip.mp4")
+assert live.vod("example.com/clip.mp4") == {"vod": True, "duration": 598.541}
+live.subprocess.run = lambda args, **k: types.SimpleNamespace(stdout="")
+assert live.probe_duration("https://v.example.com/a.mp4") == 0.0
+live.subprocess.run = real_run
+# Albums: every video is kept, the panel steps through them (wrapping), and a new lookup keeps the place.
+items = [("https://v.example.com/%d.mp4" % i, None, {}, 30, 60.0 + i) for i in range(3)]
+live._album["alb"] = {"items": items, "q": "auto", "fps_cap": 0}
+live._album_pos["alb"] = 0
+assert live.album("alb") == {"index": 0, "count": 3}
+assert live.album_step("alb", -1) is True and live.album("alb")["index"] == 2
+assert live._streams[live._links["alb"]][0] == "https://v.example.com/2.mp4" and live.vod("alb")["duration"] == 62.0
+assert live.album_step("alb", 1) and live.album("alb")["index"] == 0
+live.forget("alb")
+assert live.album("alb") == {} and live.album_step("alb", 1) is False and live._album_pos["alb"] == 0
+# find() keeps each album video once (some pages list a video twice).
+class _FakeYDL:
+    def __init__(self, opts): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def extract_info(self, link, download=False):
+        return {"title": "Alb", "entries": [{"url": "file:///etc/passwd", "title": "x"}] + [{"url": "https://v.example.com/" + n, "duration": 9, "title": "Alb (%d)" % i} for i, n in enumerate(["a.mp4", "a.mp4", "b.mp4", "b.mp4?t=9", "c.mp4"])]}
+if sys.version_info >= (3, 10):  # find() needs the Python Anki ships
+    sys.modules["yt_dlp"] = types.SimpleNamespace(YoutubeDL=_FakeYDL)
+    live._album_pos.pop("https://alb.example/a", None)
+    assert live.find(".", "https://alb.example/a") == "Alb"
+    assert live.album("https://alb.example/a") == {"index": 0, "count": 3}, live.album("https://alb.example/a")
+    assert [it[0][-5:] for it in live._album["https://alb.example/a"]["items"]] == ["a.mp4", "b.mp4", "c.mp4"]
+    live.forget("https://alb.example/a")
+    del sys.modules["yt_dlp"]
+assert live._video_key("https://V.example.com/a.mp4?token=1") == live._video_key("https://v.example.com/a.mp4?token=2")
+assert live._video_key("https://v.example.com/watch?id=1") != live._video_key("https://v.example.com/watch?id=2")
+assert live._video_key("https://v.example.com/AbC.mp4") != live._video_key("https://v.example.com/abc.mp4")  # file names keep case
+# Album switches remember which video plays (a restart resumes it), and an ignored switch redraws the panel.
+L = ns["live"]
+L._album["https://alb.example/z"] = {"items": items, "q": "auto", "fps_cap": 0}
+L._album_pos["https://alb.example/z"] = 0
+ran_bg, redraws = [], []
+ns["mw"].taskman = types.SimpleNamespace(run_in_background=lambda fn, done: ran_bg.append((fn, done)))
+real_refresh, real_steps = ns["refresh"], L.album_step
+ns["refresh"] = lambda *a, **k: redraws.append(1)
+L.album_step = lambda link, step: L._album_pos.__setitem__(link, (L._album_pos[link] + step) % 3) or True
+store.update(on=True, url="https://alb.example/z", urls=[], album_pos={"https://gone.example/": 4}, time=300)
+ns["switch_album"]("https://alb.example/z", 1)
+assert len(ran_bg) == 1
+ns["switch_album"]("https://alb.example/z", 1)  # a second press while switching is ignored
+assert len(ran_bg) == 1
+fn, done = ran_bg[0]
+done(types.SimpleNamespace(result=fn))
+assert store["album_pos"] == {"https://alb.example/z": 1} and store["time"] == 0 and redraws, store
+ns["switch_album"]("https://not-playing.example/", 1)
+assert len(ran_bg) == 1 and len(redraws) == 2
+ns["refresh"], L.album_step = real_refresh, real_steps
+L._album.pop("https://alb.example/z")
+assert live._entry_parts({"url": "https://a/b.mp4", "http_headers": {"Referer": "r"}, "duration": 5}) == ("https://a/b.mp4", None, {"Referer": "r"}, None, 5)
 assert live.ready("example.com/clip.mp4") and live.vod("example.com/clip.mp4").get("vod") is True
 assert live._streams[live._links["example.com/clip.mp4"]][0] == "https://example.com/clip.mp4"
 live.forget("example.com/clip.mp4")

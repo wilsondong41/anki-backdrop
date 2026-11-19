@@ -681,6 +681,38 @@ noslider = _rt_exec("""(() => {
   return {open: row.classList.contains("bd-seek-open"), slider: !!row.querySelector(".bd-slot-range"), skips: row.querySelectorAll(".bd-skip-btn").length};
 })()""")
 assert noslider == {"open": True, "slider": False, "skips": 2}, noslider
+# An album (several videos behind one link) gets a "‹ Video 3 of 14 ›" picker; YouTube playlists get it from the player.
+album = _rt_exec("""(() => {
+  const c = Object.assign({}, window._cfg, {streams: [{url:"https://albums.example/a/x", kind:"video", src:"http://127.0.0.1:9/t/c.webm", start:0, live:true, vod:true, duration:600, title:"Alb", album:{index:2, count:14}}],
+    urls: ["https://albums.example/a/x"], url: "https://albums.example/a/x"});
+  backdrop.start(c);
+  document.querySelector("#bd-panel .bd-slot-row .bd-seekable").click();
+  const row = document.querySelector("#bd-panel .bd-slot-row");
+  const label = row.querySelector(".bd-album-lbl").textContent;
+  const sent = []; const old = window.pycmd; window.pycmd = (m) => sent.push(m);
+  row.querySelector("[data-act=album-slot][data-delta='1']").click();
+  row.querySelector("[data-act=album-slot][data-delta='1']").click();  // a second click while loading is ignored
+  window.pycmd = old;
+  const msgs = sent.filter((m) => m.startsWith("backdrop:album:")).map((m) => JSON.parse(m.slice(15)));
+  const yc = Object.assign({}, window._cfg, {streams: [{url:"https://www.youtube.com/playlist?list=PL1", kind:"youtube", src:"https://www.youtube.com/embed/videoseries?list=PL1", title:"PL"}],
+    urls: ["https://www.youtube.com/playlist?list=PL1"], url: "https://www.youtube.com/playlist?list=PL1"});
+  backdrop.start(yc);
+  window.dispatchEvent(new MessageEvent("message", {source: document.querySelector("#bd-layer iframe").contentWindow,
+    data: JSON.stringify({event: "infoDelivery", info: {duration: 300, currentTime: 5, playlist: ["a","b","c"], playlistIndex: 1}})}));
+  document.querySelector("#bd-panel .bd-slot-row .bd-seekable").click();
+  const yl = document.querySelector("#bd-panel .bd-album-lbl");
+  const ytLabel = yl && yl.textContent;
+  // After YouTube moves to another video, that video's time isn't saved (the link reopens at the first).
+  window.dispatchEvent(new MessageEvent("message", {source: document.querySelector("#bd-layer iframe").contentWindow,
+    data: JSON.stringify({event: "infoDelivery", info: {currentTime: 40, playlist: ["a","b","c"], playlistIndex: 2}})}));
+  window._ytSent = []; window._oldPy = window.pycmd; window.pycmd = (m) => window._ytSent.push(m);
+  return {label, msgs, loading: row.querySelector(".bd-album-lbl").textContent, yt: ytLabel};
+})()""")
+assert album == {"label": "Video 3 of 14", "msgs": [{"url": "https://albums.example/a/x", "step": 1}], "loading": "Loading…",
+                 "yt": "Video 2 of 3"}, album
+loop_r = QEventLoop(); QTimer.singleShot(5600, loop_r.quit); loop_r.exec()  # the page reports times every 5 s
+yt_saved = _rt_exec("""(() => { window.pycmd = window._oldPy; return window._ytSent.filter((m) => /^backdrop:(slot_)?time:/.test(m)); })()""")
+assert yt_saved == [], yt_saved
 _rt_exec("""(() => { const c = Object.assign({}, window._cfg); backdrop.start(c);
   window._bf2 = document.querySelectorAll("#bd-layer iframe")[0]; _bf2.focus(); return 1; })()""")
 loop_f = QEventLoop(); QTimer.singleShot(200, loop_f.quit); loop_f.exec()

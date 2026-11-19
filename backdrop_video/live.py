@@ -29,6 +29,8 @@ _links = {}  # page link -> stream id; a fresh id per lookup, so a retry reloads
 _streams = {}  # stream id -> (video url, audio url or None, http headers dict)
 _fps = {}  # page link -> detected/effective integer fps
 _procs = set()  # running converters; mpv outlives Anki unless stopped
+_album = {}  # page link -> {"items": [(video, audio, headers, fps, length)], "q", "fps_cap"} for albums
+_album_pos = {}  # page link -> which album video plays (kept when the link is looked up again)
 _meta = {}  # page link -> {"vod": bool, "duration": float}; vod = a normal video (can seek), not a live stream
 LIVE_TTL, OTHER_TTL = 180, 86400  # seconds a live/offline answer, or a "not a stream" answer, is kept
 _status = {}  # page link -> (status, checked at); status "live", "offline" or "" (not a stream / unknown)
@@ -77,6 +79,7 @@ def _ensure_mpv(quality: str = "auto") -> str:
     return str(quality) if str(quality) in QUALITY_HEIGHT else "auto"
 
 
+VIDEO_FILE_PATH = re.compile(r"\.(mp4|m4v|webm|mov|mkv|ogv)$", re.I)
 WEB_LINK = re.compile(r"^https?://", re.I)
 
 
@@ -179,9 +182,34 @@ def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap
     _store_stream(link, video, None, {}, q, max_fps=fps_cap)
     # A plain video file can restart at any time; a .m3u8/.mpd manifest may be live, so it can't.
     path = video.split("?", 1)[0].lower()
+    is_vod = not path.endswith((".m3u8", ".mpd"))
+    duration = probe_duration(video) if is_vod else 0.0
     with _lock:
-        _meta[link] = {"vod": not path.endswith((".m3u8", ".mpd")), "duration": 0.0}
+        _meta[link] = {"vod": is_vod, "duration": duration}
     return ""
+
+
+def probe_duration(url: str, headers: dict = None) -> float:
+    """Length in seconds of a video file, asked from mpv; 0 if it can't tell. For sites whose
+    yt-dlp answer has no length (some album sites, plain .mp4 links), so the position slider can show."""
+    headers = headers or {}
+    cmd, env = _mpv_cmd_env()
+    args = cmd + ["--no-config", "--vo=null", "--ao=null", "--frames=1", "--quiet",
+                  "--term-playing-msg=BDDUR=${=duration}"]
+    if headers.get("User-Agent"):
+        args.append(f"--user-agent={headers['User-Agent']}")
+    if headers.get("Referer"):
+        args.append(f"--referrer={headers['Referer']}")
+    other = [f"{k}: {v}" for k, v in headers.items() if k not in ("User-Agent", "Referer")]
+    if other:
+        args.append("--http-header-fields=" + ",".join(h.replace(",", r"\,") for h in other))
+    try:
+        out = subprocess.run(args + ["--", url], capture_output=True, text=True, timeout=20, env=env,
+                             creationflags=NO_WINDOW).stdout
+        m = re.search(r"BDDUR=([\d.]+)", out)
+        return float(m.group(1)) if m and float(m.group(1)) > 0 else 0.0
+    except Exception:
+        return 0.0
 
 
 def find(folder: str, link: str, quality: str = "auto", stream_count: int = 1, cap_fps: bool = False, multi_fps="auto") -> str:
@@ -195,36 +223,99 @@ def find(folder: str, link: str, quality: str = "auto", stream_count: int = 1, c
 
     h = QUALITY_HEIGHT.get(q, 480)
     fmt = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
-    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "format": fmt, "logger": _Silent()}
+    # playlistend: a big playlist's every video is looked up before anything plays, so only the first 50.
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "playlistend": 50, "format": fmt, "logger": _Silent()}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(link, download=False)
-    if isinstance(info, dict) and info.get("entries"):
-        info = next((e for e in info["entries"] if e), info)
-    parts = (info.get("requested_formats") if isinstance(info, dict) else None) or [info]
-    video = parts[0].get("url") if parts and isinstance(parts[0], dict) else None
-    if not video:
+    if not isinstance(info, dict):
         raise RuntimeError("no-stream")
-    audio = parts[1].get("url") if len(parts) > 1 and isinstance(parts[1], dict) else None
-    headers = dict(parts[0].get("http_headers") or info.get("http_headers") or {})
     vhelp = (_codec_help or ("", ""))[0]
     fps_cap = adaptive_fps(stream_count, vhelp, multi_fps=multi_fps) if (cap_fps or q == "auto") else 0
-    src_fps = parts[0].get("fps") or (info.get("fps") if isinstance(info, dict) else None)
+    # An album holds several videos: keep them all so the panel can switch and a finished one moves on.
+    # A page can list a video twice (some sites do, through yt-dlp's generic reader): keep each video once.
+    seen, entries = set(), []
+    for e in info.get("entries") or []:
+        v = _entry_parts(e)[0] if isinstance(e, dict) else None
+        if isinstance(v, str) and WEB_LINK.match(v) and _video_key(v) not in seen:  # skip one bad video, not the album
+            seen.add(_video_key(v))
+            entries.append(e)
+    entries = entries or [info]
+    items = [_entry_parts(e) for e in entries]
+    if not items[0][0]:
+        raise RuntimeError("no-stream")
+    with _lock:
+        idx = _album_pos.get(link, 0) % len(items) if len(items) > 1 else 0
+        if len(items) > 1:
+            _album[link] = {"items": items, "q": q, "fps_cap": fps_cap}
+            _album_pos[link] = idx
+        else:
+            _album.pop(link, None)
+    entry = entries[idx]
+    is_live = bool(entry.get("is_live")) or entry.get("live_status") in ("is_live", "is_upcoming")
+    _play_item(link, items[idx], q, fps_cap, is_live)
+    with _lock:
+        _status[link] = ("live" if is_live else "", time.time())
+    if len(items) == 1 or not info.get("title"):
+        info = entry  # an album keeps its own title; its videos are often "<album> (1)", "(2)"…
+    if info.get("extractor_key", "").startswith("Twitch") and info.get("description"):
+        return f"{info.get('uploader') or info['uploader_id']} · {info['description']}"  # Twitch's title is the channel
+    # yt-dlp adds the lookup time to live titles ("... 2026-10-26 01:55").
+    return re.sub(r"( \(live\))? \d{4}-\d\d-\d\d \d\d:\d\d$", "", info.get("title") or "")
+
+
+def _video_key(url: str) -> str:
+    """Same video file = same key: for a plain file (.mp4, .webm…) the part after "?" is usually a
+    per-copy access token, so it's left out; other addresses must match in full."""
+    base, _, _query = url.partition("?")
+    if not VIDEO_FILE_PATH.search(base):
+        return url
+    host, _, path = base.split("://", 1)[-1].partition("/")
+    return host.lower() + "/" + path  # file names are case-sensitive (often random letters)
+
+
+def _entry_parts(entry: dict) -> tuple:
+    """(video, audio, headers, source fps, length) of one yt-dlp answer or album entry."""
+    parts = entry.get("requested_formats") or [entry]
+    first = parts[0] if isinstance(parts[0], dict) else {}
+    video = first.get("url")
+    audio = parts[1].get("url") if len(parts) > 1 and isinstance(parts[1], dict) else None
+    headers = dict(first.get("http_headers") or entry.get("http_headers") or {})
+    return video, audio, headers, first.get("fps") or entry.get("fps"), entry.get("duration")
+
+
+def _play_item(link: str, item: tuple, q: str, fps_cap: int, is_live: bool = False) -> None:
+    video, audio, headers, src_fps, duration = item
     if fps_cap and (fps_cap >= 60 or (isinstance(src_fps, (int, float)) and 0 < src_fps <= fps_cap)):
         fps_cap = 0  # source already fits under the cap; pass native frames through without duplicating
     known_fps = None
     if isinstance(src_fps, (int, float)) and src_fps > 0:
         known_fps = min(round(src_fps), fps_cap) if fps_cap else round(src_fps)
     _store_stream(link, video, audio, headers, q, max_fps=fps_cap, fps=known_fps)
-    is_live = bool(info.get("is_live")) or info.get("live_status") in ("is_live", "is_upcoming")
-    duration = info.get("duration")
+    if not is_live and not (isinstance(duration, (int, float)) and duration > 0):
+        duration = probe_duration(video, headers)  # some sites: yt-dlp gives no length
     with _lock:
         _meta[link] = {"vod": not is_live,
                        "duration": float(duration) if isinstance(duration, (int, float)) and duration > 0 else 0.0}
-        _status[link] = ("live" if is_live else "", time.time())
-    if info.get("extractor_key", "").startswith("Twitch") and info.get("description"):
-        return f"{info.get('uploader') or info['uploader_id']} · {info['description']}"  # Twitch's title is the channel
-    # yt-dlp adds the lookup time to live titles ("... 2026-10-26 01:55").
-    return re.sub(r"( \(live\))? \d{4}-\d\d-\d\d \d\d:\d\d$", "", info.get("title") or "")
+
+
+def album(link: str) -> dict:
+    """{"index": 0-based, "count": n} when the link is an album of several videos; else {}."""
+    with _lock:
+        a = _album.get(link)
+        return {"index": _album_pos.get(link, 0), "count": len(a["items"])} if a else {}
+
+
+def album_step(link: str, step: int) -> bool:
+    """Switch an album to the video `step` away (wrapping around); slow (asks mpv for the length)."""
+    with _lock:
+        a = _album.get(link)
+        if not a:
+            return False
+        idx = (_album_pos.get(link, 0) + int(step)) % len(a["items"])
+        _album_pos[link] = idx
+        item = a["items"][idx]
+    _play_item(link, item, a["q"], a["fps_cap"])
+    return True
 
 
 class _Silent:
@@ -308,6 +399,7 @@ def forget(link: str) -> None:
         _streams.pop(_links.pop(link, None), None)
         _fps.pop(link, None)
         _meta.pop(link, None)
+        _album.pop(link, None)
 
 
 def _mpv_cmd_env() -> tuple:

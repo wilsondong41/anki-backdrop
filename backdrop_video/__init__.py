@@ -30,7 +30,7 @@ MAX_FOLDER_ITEMS = 50
 DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70,
             "true_transparency": False, "volume": 50, "time": 0, "paused": False, "picture": True,
             "panel": False, "quality": "auto", "multi_fps": "auto", "suppress_ytdlp_prompt": False,
-            "title": "", "recent": [], "folders": []}
+            "title": "", "recent": [], "folders": [], "album_pos": {}}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 # Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
@@ -81,6 +81,10 @@ def conf() -> dict:
 position = float(conf()["time"])  # seconds into the current video, so it resumes after a reload or restart
 _saved_position = position
 _positions = {}  # url -> float seconds into each active video slot
+_switching = set()  # album links moving to another of their videos
+# Which video of each playing album was on, so a restart resumes that video (the saved time belongs to it).
+live._album_pos.update({u: i for u, i in (conf()["album_pos"] or {}).items()
+                        if isinstance(u, str) and isinstance(i, int) and 0 <= i < 1000})
 
 
 _quick = (0.0, None)  # (when read, config) for the app-wide key/mouse filter, which runs on every click and key repeat
@@ -350,6 +354,9 @@ def _stream_spec(url: str, start: int, paused: bool, title: str = "") -> dict:
             spec.update(vod=True, duration=clip.get("duration") or 0, start=int(start))
             if start >= 1:
                 spec["src"] += f"?start={int(start)}"
+        album = live.album(url)
+        if album:  # several videos behind one link (a photo/video album, a multi-video post): the panel can switch
+            spec["album"] = album
     elif spec["kind"] == "page" and (
         STREAM_SITES.search(urlparse(spec["src"]).hostname or "") or LIVE_MEDIA.search(urlparse(spec["src"]).path)
     ):
@@ -589,6 +596,16 @@ def on_js_message(handled, message, context):
     if message == "backdrop:break:0":
         exit_break()
         return True, None
+    if message.startswith("backdrop:album:"):
+        try:
+            payload = json.loads(message.split(":", 2)[2])
+            step = int(payload.get("step", 0)) if isinstance(payload, dict) else 0
+            url = payload.get("url") if isinstance(payload, dict) else None
+        except (ValueError, TypeError, AttributeError):
+            return True, None
+        if isinstance(url, str) and step in (-1, 1):
+            switch_album(url, step)
+        return True, None
     if message.startswith("backdrop:slot_time:"):
         try:
             payload = json.loads(message.split(":", 2)[2])
@@ -717,6 +734,38 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
             refresh()
 
     mw.taskman.run_in_background(task, done)
+
+
+def switch_album(url: str, step: int) -> None:
+    """Play the next (step 1) or previous (-1) video of an album link; a finished one moves on by itself."""
+    if url in _switching:
+        return
+    if not live.album(url) or url not in active_urls():
+        refresh()  # the panel shows "Loading…" until it's redrawn
+        return
+    _switching.add(url)
+
+    def done(fut):
+        global position
+        _switching.discard(url)
+        try:
+            fut.result()
+        except Exception:
+            tooltip("Couldn't open that video.", period=4000)
+            refresh()
+            return
+        _positions[url] = 0.0
+        c = conf()
+        if url == c.get("url"):
+            position = 0.0
+        playing = set(active_urls(c))
+        kept = {u: i for u, i in (c["album_pos"] or {}).items() if u in playing}
+        save(album_pos={**kept, url: live.album(url).get("index", 0)})
+        if url == c.get("url"):
+            save_position()  # the saved time now belongs to the new video
+        refresh()
+
+    mw.taskman.run_in_background(lambda: live.album_step(url, step), done)
 
 
 def set_title(title: str, url: str = None) -> None:

@@ -10,6 +10,7 @@
 - **Quick controls while studying.** A small tab on the right edge opens a compact panel that auto-minimizes when you click back to study and never steals keyboard focus from Space or 1–4:
   - Play / Pause, Hide picture (keep sound), **Break zone**, Turn on / off
   - **Per-video timestamp & `-10s` / `+10s` skip:** Click any non-live video's title in **Now Playing** (even with 2–4 videos playing at once) to open `-10s` / `+10s` skip buttons and a scrub slider for just that video, then click `↩` to return to `★` / Mute / `×`. Works for YouTube **and other sites' videos** too, and each video picks up where you left it
+  - **Albums & playlists:** A link with several videos (YouTube playlists, or albums and multi-video posts on other sites) shows `‹ Video 3 of 14 ›` under the slider so you can pick a video. When one ends, the next one plays, and it remembers which video you were on
   - **Backdrop** blur/opacity, **Study card** translucency (+ **True transparency**), and **Volume** sliders
   - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) and **Frame rate** (`Auto`, `15`, `24`, `30`, `45`, `Source`; hover any option for what it's good for) with a live FPS readout. Lower frame rates save CPU and battery, and the blur hides the difference
   - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links (with `+` to play alongside), or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
