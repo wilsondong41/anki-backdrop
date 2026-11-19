@@ -17,6 +17,7 @@ JS = open(os.path.join(ROOT, "backdrop_video", "web", "backdrop.js"), encoding="
 app = QApplication(sys.argv)
 view = QWebEngineView()
 view.resize(1280, 800)
+view.show()
 page = view.page()
 
 
@@ -234,6 +235,7 @@ assert fit_res["pRect"] == {"w": 1280, "h": 800} and fit_res["clearScale"] == "1
 
 view2 = QWebEngineView()
 view2.resize(500, 900)
+view2.show()
 page2 = view2.page()
 loop2 = QEventLoop()
 page2.loadFinished.connect(lambda _ok: loop2.quit())
