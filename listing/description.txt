@@ -1,6 +1,6 @@
 **Play a soft, blurred video or live stream behind your Anki cards while you study** — instead of covering your card text with a picture-in-picture window.
 
-<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/1-card-backdrop.png" width="640" alt="Frosted-glass card floating over a two-stream blurred backdrop">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/495867ee663189fc77c2e59fce533632a38048d6/listing/1-card-backdrop.png" width="640" alt="Frosted-glass Anki question card floating over a split lo-fi and subway-runner blurred backdrop">
 
 ## What it does
 
@@ -19,14 +19,14 @@
 - **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Adaptive `30–60 fps` (or set `multi_fps` in add-on config) keeps multi-stream CPU usage low.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 
-<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/2-quick-panel.png" width="640" alt="Right-edge quick controls panel with Study card slider, Break zone, 1440/4K quality pills, multi-stream mute/remove, Search popup button, and Recent delete">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/495867ee663189fc77c2e59fce533632a38048d6/listing/2-quick-panel.png" width="640" alt="Right-edge Controls/Library sidebar with labeled quick actions, Now Playing mute/save/remove, Display & Sound sliders with True transparency, and Stream Quality with live FPS">
 
 ## Getting started
 
 1. Open **Tools → Backdrop Video…** (or press **Ctrl+Shift+B** / **Cmd+Shift+B**) to browse/pre-find videos, organize your **Saved Folders**, adjust display settings, or install/update the optional `yt-dlp` live-stream helper.
 2. Or click the small film-strip tab on the right edge while studying to paste a link, browse, save into folders, adjust blur/transparency/volume, or add streams alongside what's playing.
 
-<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/3-settings-dialog.png" width="520" alt="Tools → Backdrop Video… dialog with Study card slider, Browse…, and Add (+)">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/495867ee663189fc77c2e59fce533632a38048d6/listing/3-settings-dialog.png" width="640" alt="Tools → Backdrop Video… dialog with Saved Folders & Browse organizer, Display & Live Streams sliders, True transparency, and Download yt-dlp Helper button">
 
 ## Good to know
 
