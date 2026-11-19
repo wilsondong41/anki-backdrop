@@ -478,7 +478,6 @@ window.backdrop = (() => {
               <span>No video playing yet.</span>
               <button type="button" class="bd-primary-btn" data-act="browse">${svg("search")}<span>Browse Videos</span></button>
             </div>
-            <label class="bd-slider bd-seek" hidden><span class="bd-seek-head"><span>Position</span><span class="bd-seek-time">0:00 / 0:00</span></span><input type="range" min="0" max="100" value="0" data-key="seek"></label>
           </div>
           <div class="bd-card">
             <div class="bd-card-head"><span class="bd-label">Display &amp; Sound</span></div>
@@ -705,11 +704,6 @@ window.backdrop = (() => {
     for (const range of panel.querySelectorAll("input[type=range]")) {
       const key = range.dataset.key;
       range.addEventListener("input", () => {
-        if (key === "seek") {
-          seeking = true;
-          panel.querySelector(".bd-seek-time").textContent = `${fmtTime(+range.value)} / ${fmtTime(duration)}`;
-          return;
-        }
         cfg[key] = +range.value;
         const valEl = panel.querySelector(`[data-val="${key}"]`);
         if (valEl) valEl.textContent = cfg[key] + "%";
@@ -717,12 +711,6 @@ window.backdrop = (() => {
         else setVolume(cfg.volume);
       });
       range.addEventListener("change", () => {
-        if (key === "seek") {
-          seeking = false;
-          seekTo(+range.value);
-          range.blur();
-          return;
-        }
         set({ [key]: +range.value });
         range.blur();
       });
@@ -1143,7 +1131,15 @@ window.backdrop = (() => {
             top.append(backBtn, fwdBtn, closeBtn);
             row.appendChild(top);
             const seekBar = document.createElement("div");
-            seekBar.className = "bd-slot-seek";
+            seekBar.className = "bd-slot-seek bd-seek";
+            const seekHead = document.createElement("div");
+            seekHead.className = "bd-seek-head";
+            const posLbl = document.createElement("span");
+            posLbl.textContent = "Position";
+            const timeLbl = document.createElement("span");
+            timeLbl.className = "bd-slot-time bd-seek-time";
+            timeLbl.textContent = s.duration > 0 ? `${fmtTime(s.time)} / ${fmtTime(s.duration)}` : fmtTime(s.time);
+            seekHead.append(posLbl, timeLbl);
             const range = document.createElement("input");
             range.type = "range";
             range.className = "bd-slot-range";
@@ -1153,9 +1149,6 @@ window.backdrop = (() => {
             range.value = String(Math.min(Math.floor(s.time || 0), max));
             range.dataset.slotUrl = s.url;
             range.setAttribute("aria-label", "Video position");
-            const timeLbl = document.createElement("span");
-            timeLbl.className = "bd-slot-time";
-            timeLbl.textContent = s.duration > 0 ? `${fmtTime(s.time)} / ${fmtTime(s.duration)}` : fmtTime(s.time);
             range.addEventListener("input", () => {
               s.seeking = true;
               timeLbl.textContent = s.duration > 0 ? `${fmtTime(+range.value)} / ${fmtTime(s.duration)}` : fmtTime(+range.value);
@@ -1166,7 +1159,7 @@ window.backdrop = (() => {
               range.blur();
             });
             range.addEventListener("pointerup", () => range.blur());
-            seekBar.append(range, timeLbl);
+            seekBar.append(seekHead, range);
             row.appendChild(seekBar);
           } else {
             const starBtn = document.createElement("button");
@@ -1286,17 +1279,6 @@ window.backdrop = (() => {
         timeLbl.textContent = s.duration > 0 ? `${fmtTime(s.time)} / ${fmtTime(s.duration)}` : fmtTime(s.time);
       }
     }
-    const row = panel.querySelector(".bd-seek");
-    if (!row) return;
-    const s0 = slots[0];
-    const canSeek = !!(cfg && cfg.on && slots.length === 1 && canSlotSeek(s0) && duration > 0 && !seekOpenSlots.has(s0.url));
-    row.hidden = !canSeek;
-    if (!canSeek || seeking) return;
-    const range = row.querySelector("input");
-    const max = Math.max(1, Math.floor(duration));
-    range.max = max;
-    if (document.activeElement !== range) range.value = Math.min(Math.floor(time), max);
-    row.querySelector(".bd-seek-time").textContent = `${fmtTime(time)} / ${fmtTime(duration)}`;
   }
 
   function seekSlotTo(s, sec) {

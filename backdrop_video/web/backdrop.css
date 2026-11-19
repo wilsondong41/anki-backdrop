@@ -844,21 +844,31 @@
 
 #bd-panel .bd-slot-seek {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-top: 2px;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--bd-surface-line);
+}
+
+#bd-panel .bd-slot-seek .bd-seek-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--bd-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 #bd-panel .bd-slot-range {
-  flex: 1;
-  min-width: 0;
+  display: block;
+  width: 100%;
+  margin: 2px 0 0;
   accent-color: var(--bd-accent);
   cursor: pointer;
 }
 
 #bd-panel .bd-slot-time {
-  flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--bd-dim);
 }

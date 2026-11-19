@@ -165,11 +165,11 @@ panel_res = run_html(
       backdrop.start({on:true, plate:true, lite:false, picture:true, panel:true,
         url:"https://www.twitch.tv/live", kind:"video", src:"", start:0, live:true,
         strength:50, volume:50, quality:"480", paused:true, title:"Live", recent:[]});
-      const liveSeekHidden = document.querySelector("#bd-panel .bd-seek").hidden;
+      const liveSeekHidden = !document.querySelector("#bd-panel .bd-seek");
       const activeBefore = document.querySelector("#bd-panel .bd-pill.bd-active").dataset.quality;
       document.querySelector("#bd-panel .bd-pill[data-quality='720']").click();
       const activeAfter = document.querySelector("#bd-panel .bd-pill.bd-active").dataset.quality;
-      // Switch to a YouTube embed, simulate infoDelivery with duration & currentTime, then test seek.
+      // Switch to a YouTube embed, simulate infoDelivery with duration & currentTime, click title to open full-width seek.
       backdrop.start({on:true, plate:true, lite:false, picture:true, panel:true,
         url:"https://youtu.be/M7lc1UVf-VE", kind:"youtube", src:"https://www.youtube.com/embed/M7lc1UVf-VE?enablejsapi=1",
         start:0, live:false, strength:50, volume:50, quality:"720", paused:true, title:"", recent:[]});
@@ -178,18 +178,19 @@ panel_res = run_html(
         source: iframeWin,
         data: JSON.stringify({event: "infoDelivery", info: {duration: 600, currentTime: 125}})
       }));
-      const vodSeekHidden = document.querySelector("#bd-panel .bd-seek").hidden;
+      document.querySelector("#bd-panel .bd-slot-name").click();
+      const vodSeekHidden = !document.querySelector("#bd-panel .bd-seek");
       const seekLabel = document.querySelector("#bd-panel .bd-seek-time").textContent;
       const seekInput = document.querySelector("#bd-panel .bd-seek input");
       seekInput.value = "300";
       seekInput.dispatchEvent(new Event("change", {bubbles: true}));
       const afterSeekLabel = document.querySelector("#bd-panel .bd-seek-time").textContent;
-      // If YouTube reports isLive:true later, seek hides even if duration was non-zero.
+      // If YouTube reports isLive:true later, seek closes and hides even if duration was non-zero.
       window.dispatchEvent(new MessageEvent("message", {
         source: iframeWin,
         data: JSON.stringify({event: "infoDelivery", info: {videoData: {isLive: true}, duration: 14400, currentTime: 500}})
       }));
-      const ytLiveSeekHidden = document.querySelector("#bd-panel .bd-seek").hidden;
+      const ytLiveSeekHidden = !document.querySelector("#bd-panel .bd-seek");
       return {cmds, liveSeekHidden, activeBefore, activeAfter, vodSeekHidden, seekLabel, afterSeekLabel, ytLiveSeekHidden};
     })()""",
 )
