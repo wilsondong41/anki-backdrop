@@ -2,7 +2,7 @@
 
 Play a soft, blurred video or live stream behind your Anki cards while you study — instead of covering card text with a picture-in-picture window.
 
-![Frosted-glass Anki question card over split lo-fi and subway-runner blurred backdrop](https://raw.githubusercontent.com/wilsondong41/anki-backdrop/0a0759296c96e26828fcd10c46d3b2287a8665a7/listing/1-card-backdrop.png)
+![Frosted-glass Anki question card over split lo-fi and subway-runner blurred backdrop](https://raw.githubusercontent.com/wilsondong41/anki-backdrop/ca0984b00eb9363d88203d384c2df81231bfba44/listing/1-card-backdrop.png)
 
 ## Features
 
@@ -15,7 +15,7 @@ Play a soft, blurred video or live stream behind your Anki cards while you study
 - **Audio ducking:** Automatically drops backdrop volume to 1/4 while card audio, `{{tts}}`, or [Read Aloud](https://ankiweb.net/shared/info/1227298382) is speaking.
 - **Live streams & webcams:** Supports YouTube, YouTube Live, Twitch, Kick, direct `.mp4`/`.webm`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat). Regular YouTube/WebM videos stream directly; live streams and H.264/HLS feeds convert in memory via Anki's bundled `mpv` using hardware decode (`--hwdec=auto-safe`) and adaptive `30–60 fps` (configurable via `multi_fps` in add-on config), stopping immediately when paused or closed.
 
-![Right-edge Controls and Library sidebar](https://raw.githubusercontent.com/wilsondong41/anki-backdrop/0a0759296c96e26828fcd10c46d3b2287a8665a7/listing/2-quick-panel.png)
+![Right-edge Controls and Library sidebar](https://raw.githubusercontent.com/wilsondong41/anki-backdrop/ca0984b00eb9363d88203d384c2df81231bfba44/listing/2-quick-panel.png)
 
 ## Usage
 
