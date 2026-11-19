@@ -10,7 +10,7 @@ aqt.mw = types.SimpleNamespace(addonManager=types.SimpleNamespace(
 sys.modules["aqt.overview"].Overview = sys.modules["aqt.reviewer"].Reviewer = object
 sys.modules["aqt.utils"].tooltip = lambda *a, **k: None
 sys.modules["aqt.utils"].askUser = lambda *a, **k: False
-for n in "QComboBox QDialog QFormLayout QHBoxLayout QLabel QLineEdit QPushButton QSlider Qt QVBoxLayout".split():
+for n in "QCheckBox QComboBox QDialog QFormLayout QHBoxLayout QLabel QLineEdit QPushButton QSlider Qt QVBoxLayout".split():
     setattr(sys.modules["aqt.qt"], n, object)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backdrop_video"))
@@ -43,10 +43,10 @@ store = {}
 aqt.mw.addonManager.getConfig = lambda n: dict(store)
 aqt.mw.addonManager.writeConfig = lambda n, c: store.update(c)
 aqt.mw.state = "deckBrowser"
-ns["apply"]({"strength": 250, "plate_opacity": -10, "volume": "50", "panel": 1, "picture": False, "evil": True, "quality": "720"})
-assert store["strength"] == 100 and store["plate_opacity"] == 0 and store["volume"] == 50 and store["panel"] is False and store["quality"] == "720" and "evil" not in store
-ns["apply"]({"quality": "999", "volume": float("nan"), "strength": 42})
-assert store["quality"] == "720" and store["strength"] == 42 and store["volume"] == 50
+ns["apply"]({"strength": 250, "plate_opacity": -10, "true_transparency": True, "volume": "50", "panel": 1, "picture": False, "evil": True, "quality": "720"})
+assert store["strength"] == 100 and store["plate_opacity"] == 0 and store["true_transparency"] is True and store["volume"] == 50 and store["panel"] is False and store["quality"] == "720" and "evil" not in store
+ns["apply"]({"quality": "999", "volume": float("nan"), "true_transparency": "yes", "strength": 42})
+assert store["quality"] == "720" and store["strength"] == 42 and store["volume"] == 50 and store["true_transparency"] is True
 for i in range(7):
     ns["apply"]({"url": f"youtu.be/aaaaaaaaaa{i}"})
 assert len(store["recent"]) == 5 and store["recent"][0]["url"] == "youtu.be/aaaaaaaaaa6" and store["on"]
@@ -77,7 +77,14 @@ assert "min(ih,2160)" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n
 assert "fps=30" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "480", max_fps=30))
 assert 30 <= live.adaptive_fps(1, "--ovc=libvpx ") <= 60 and live.adaptive_fps(3, "--ovc=libvpx ") == 30
 assert live.adaptive_fps(3, "--ovc=libvpx ", multi_fps=60) == 60 and live.adaptive_fps(3, "--ovc=libvpx ", multi_fps=0) == 0
-assert "Auto:" in live.effective_note("auto", 1) and "source fps" in live.effective_note("auto", 3, multi_fps=0)
+assert "Auto:" in live.effective_note("auto", 1) and "uncapped fps" in live.effective_note("auto", 3, multi_fps=0)
+assert live.effective_note("2160", 1) == "4K" and live.effective_note("2160", 1, fps_list=[60]) == "4K, 60 fps"
+assert live.effective_note("1080", 2, fps_list=[30, 60]) == "1080p, 30–60 fps"
+assert "source fps" not in live.effective_note("2160", 1) and "source fps" not in live.effective_note("auto", 3, multi_fps=0)
+ns["on_js_message"]((False, None), 'backdrop:fps:{"url":"youtu.be/aaaaaaaaaa3","fps":60}', None)
+assert live.stream_fps("youtu.be/aaaaaaaaaa3") == 60
+live.forget("youtu.be/aaaaaaaaaa3")
+assert live.stream_fps("youtu.be/aaaaaaaaaa3") is None
 assert "--hwdec=auto-safe" in live.convert_cmd("v", None)
 assert "threads=4" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "1440"))
 assert "--ovc=libvpx" not in live.pick_codecs("  --ovc=libvpx-vp9  x\n", "") and live.pick_codecs("--ovc=libx264", "") == []
@@ -168,12 +175,16 @@ assert ns["state"](True)["muted"] == ["https://example.com/2.webm"]
 ns["apply"]({"remove_url": "https://example.com/1.webm"})
 st3 = ns["state"](True)
 assert st3["urls"] == ["https://example.com/2.webm", "https://example.com/3.webm", "https://example.com/4.webm"] and st3["url"] == "https://example.com/2.webm", st3
-# Deleting from recent works, and removing the last active stream clears url/on cleanly.
+# Deleting from recent works (including current url when off), and removing the last active stream clears url/on cleanly.
 ns["apply"]({"forget_recent": "https://example.com/1.webm"})
 assert all(r["url"] != "https://example.com/1.webm" for r in ns["conf"]()["recent"])
 for u in list(st3["urls"]):
     ns["apply"]({"remove_url": u})
 assert not ns["conf"]()["on"] and ns["conf"]()["url"] == "" and ns["conf"]()["urls"] == []
+ns["apply"]({"url": "https://example.com/off-recent.webm"})
+ns["apply"]({"on": False})
+ns["apply"]({"forget_recent": "https://example.com/off-recent.webm"})
+assert ns["conf"]()["url"] == "" and all(r["url"] != "https://example.com/off-recent.webm" for r in ns["conf"]()["recent"])
 # Break Zone moves review -> overview cleanly and restores on exit, exposing Pomodoro Bar or generic Pomodoro rest status.
 moves = []
 ns["mw"].state = "review"
@@ -224,4 +235,27 @@ try:
 finally:
     sys.version_info = orig_ver
     ns["os"].path.exists = os_path_exists
+# Saved folders: create, save (case-insensitive dedupe), title sync, play_urls (cap at 4), unsave, delete, and Browse start URL.
+store.clear()
+ns["apply"]({"create_folder": "Lofi"})
+ns["apply"]({"save_item": {"folder": "lofi", "url": "https://example.com/a.webm", "title": "Track A"}})
+ns["apply"]({"save_item": {"folder": "Lofi", "url": "https://example.com/a.webm", "title": "Dup"}})  # no duplicate
+ns["apply"]({"save_item": {"folder": "Chill", "url": "https://example.com/b.webm", "title": ""}})
+flds = ns["state"](True)["folders"]
+assert len(flds) == 2 and flds[0]["name"] == "Lofi" and len(flds[0]["items"]) == 1 and flds[0]["items"][0]["title"] == "Track A", flds
+ns["set_title"]("Track B", "https://example.com/b.webm")
+assert ns["state"](True)["folders"][1]["items"][0]["title"] == "Track B"
+ns["apply"]({"play_urls": ["https://example.com/a.webm", "https://example.com/b.webm", "https://example.com/c.webm", "https://example.com/d.webm", "https://example.com/e.webm"]})
+st_multi = ns["state"](True)
+assert st_multi["on"] and len(st_multi["urls"]) == 4 and st_multi["urls"][0] == "https://example.com/a.webm", st_multi
+ns["apply"]({"unsave_item": {"folder": "Lofi", "url": "https://example.com/a.webm"}})
+assert ns["state"](True)["folders"][0]["items"] == []
+ns["apply"]({"delete_folder": "Lofi"})
+assert [f["name"] for f in ns["state"](True)["folders"]] == ["Chill"]
+# Browse start URL avoids reopening an already-playing video and falls back to that site's home page.
+ns["_last_browse_url"] = "https://www.twitch.tv/lofi_channel"
+store.update(on=True, url="https://www.twitch.tv/lofi_channel", urls=["https://www.twitch.tv/lofi_channel"])
+assert ns["_browse_start_url"]() == "https://www.twitch.tv/", ns["_browse_start_url"]()
+store.update(on=False)
+assert ns["_browse_start_url"]() == "https://www.twitch.tv/lofi_channel", ns["_browse_start_url"]()
 print("ok")

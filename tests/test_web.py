@@ -327,4 +327,111 @@ assert multi_res["singleSlotRows"] == 1 and multi_res["singleHasRemove"] and mul
 assert multi_res["breakClass"] and multi_res["breakBodyOp"] == "0" and multi_res["breakText"] == "Break · Rest 2:05", multi_res
 assert "Auto: 480p, up to 60 fps" in multi_res["hintText"] and multi_res["hasBrowseBtn"], multi_res
 
+# 7. True transparency toggle (reduces glass blur, border, and shadow), Recents X removal, and numeric FPS display.
+extra_res = run_html(
+    f"<!doctype html><html class='night-mode'><head><style>{CSS} * {{ transition: none !important; }}</style><script>{JS}</script></head>"
+    "<body class='nightMode'><div id='qa'>Card</div></body></html>",
+    """(() => {
+      const cmds = [];
+      window.pycmd = (m) => cmds.push(m);
+      const s = (u, fps=0) => ({url:u, kind:"video", src:"", start:0, live:true, title:"Stream", fps});
+      // Frosted mode (true_transparency: false) at plate_opacity=0 keeps blur & border.
+      backdrop.start({on:true, plate:true, lite:false, picture:true, panel:true,
+        url:"u1", urls:["u1"], muted:[], streams:[s("u1", 60)], strength:100, plate_opacity:0,
+        true_transparency:false, volume:50, quality:"2160", auto_note:"4K", paused:true, title:"One",
+        recent:[{url:"u1", title:"One"}, {url:"u_old", title:"Old"}]});
+      const qa = document.getElementById("qa");
+      const hint60 = document.querySelector("#bd-panel .bd-hint").textContent;
+      const frostFilter = getComputedStyle(qa, "::before").backdropFilter || getComputedStyle(qa, "::before").webkitBackdropFilter;
+      const frostShadow = getComputedStyle(qa).boxShadow;
+      const frostNoGlass = document.documentElement.classList.contains("bd-noglass");
+      // Toggle True transparency ON via sidebar checkbox at plate_opacity=0 -> blur, border & shadow vanish.
+      const ttBox = document.querySelector("#bd-panel input[data-key='true_transparency']");
+      ttBox.click();
+      const tt0Filter = getComputedStyle(qa, "::before").backdropFilter || getComputedStyle(qa, "::before").webkitBackdropFilter;
+      const tt0Shadow = getComputedStyle(qa).boxShadow;
+      const tt0Border = document.documentElement.style.getPropertyValue("--bd-plate-border");
+      const tt0NoGlass = document.documentElement.classList.contains("bd-noglass");
+      // Slide plate_opacity to 50 with True transparency ON -> partial blur (7px) & partial border/shadow.
+      const cardSlider = document.querySelector("#bd-panel input[data-key='plate_opacity']");
+      cardSlider.value = "50";
+      cardSlider.dispatchEvent(new Event("input", {bubbles: true}));
+      const tt50GlassVar = document.documentElement.style.getPropertyValue("--bd-glass-filter");
+      const tt50NoGlass = document.documentElement.classList.contains("bd-noglass");
+      // Click Recent X -> immediately removed from DOM and sends forget_recent.
+      const recentCountBefore = document.querySelectorAll("#bd-panel .bd-recent-row").length;
+      document.querySelector("#bd-panel [data-act='forget-recent']").click();
+      const recentCountAfter = document.querySelectorAll("#bd-panel .bd-recent-row").length;
+      // When off, all recent items (including last url) are shown and deletable.
+      backdrop.start({on:false, plate:true, lite:false, picture:true, panel:true,
+        url:"u1", urls:[], muted:[], streams:[], strength:100, plate_opacity:0,
+        true_transparency:true, volume:50, quality:"auto", auto_note:"Auto: 480p, up to 60 fps", paused:true, title:"One",
+        recent:[{url:"u1", title:"One"}, {url:"u2", title:"Two"}]});
+      const offRecentCount = document.querySelectorAll("#bd-panel .bd-recent-row").length;
+      return {cmds, hint60, frostFilter, frostShadow, frostNoGlass, tt0Filter, tt0Shadow, tt0Border, tt0NoGlass, tt50GlassVar, tt50NoGlass, recentCountBefore, recentCountAfter, offRecentCount};
+    })()""",
+)
+assert "4K, 60 fps" in extra_res["hint60"], extra_res
+assert "blur(14px)" in extra_res["frostFilter"] and extra_res["frostShadow"] != "none" and not extra_res["frostNoGlass"], extra_res
+assert extra_res["tt0Filter"] == "none" and extra_res["tt0Shadow"] == "none" and "0.000" in extra_res["tt0Border"] and extra_res["tt0NoGlass"], extra_res
+assert "blur(7px)" in extra_res["tt50GlassVar"] and not extra_res["tt50NoGlass"], extra_res
+assert any(c == 'backdrop:set:{"true_transparency":true}' for c in extra_res["cmds"]), extra_res
+assert extra_res["recentCountBefore"] == 1 and extra_res["recentCountAfter"] == 0, extra_res
+assert any(c == 'backdrop:set:{"forget_recent":"u_old"}' for c in extra_res["cmds"]), extra_res
+assert extra_res["offRecentCount"] == 2, extra_res
+
+# 8. Saved folders: star save into new folder, folder pills, multi-select up to 4 across folders, unsave, and 2-step folder delete.
+folder_res = run_html(
+    f"<!doctype html><html><head><style>{CSS}</style><script>{JS}</script></head>"
+    "<body><div id='qa'>Card</div></body></html>",
+    """(() => {
+      const cmds = [];
+      window.pycmd = (m) => cmds.push(m);
+      const s = (u, t) => ({url:u, kind:"video", src:"", start:0, live:false, title:t});
+      backdrop.start({on:true, plate:true, lite:false, picture:true, panel:true,
+        url:"https://e.test/1", urls:["https://e.test/1"], muted:[], streams:[s("https://e.test/1", "Vid 1")],
+        strength:50, plate_opacity:70, true_transparency:false, volume:50, quality:"auto", paused:true, title:"Vid 1",
+        recent:[{url:"https://e.test/1", title:"Vid 1"}],
+        folders:[
+          {name:"Study", items:[
+            {url:"https://e.test/2", title:"Vid 2"},
+            {url:"https://e.test/3", title:"Vid 3"},
+            {url:"https://e.test/4", title:"Vid 4"},
+            {url:"https://e.test/5", title:"Vid 5"},
+            {url:"https://e.test/6", title:"Vid 6"},
+          ]}
+        ]});
+      // Save active stream into a brand new folder "Lofi" via star button + inline form.
+      document.querySelector("#bd-panel .bd-slot-row [data-act='open-save']").click();
+      const saveInp = document.querySelector("#bd-panel .bd-save-form input");
+      saveInp.value = "Lofi";
+      document.querySelector("#bd-panel .bd-save-form").dispatchEvent(new Event("submit", {bubbles:true, cancelable:true}));
+      const starSaved = document.querySelector("#bd-panel .bd-slot-row .bd-star").classList.contains("bd-saved");
+      const pillTexts = Array.from(document.querySelectorAll("#bd-panel .bd-folder-pill")).map((p) => p.textContent);
+      // Enter Select mode, select 1 from Lofi + 3 from Study, verify 5th item is disabled (cap 4), then Play selected.
+      document.querySelector("#bd-panel [data-act='toggle-select']").click();
+      document.querySelector("#bd-panel [data-act='toggle-select-item'][data-save-url='https://e.test/1']").click();
+      document.querySelector("#bd-panel .bd-folder-pill[data-folder-name='Study']").click();
+      document.querySelector("#bd-panel [data-act='toggle-select-item'][data-save-url='https://e.test/2']").click();
+      document.querySelector("#bd-panel [data-act='toggle-select-item'][data-save-url='https://e.test/3']").click();
+      document.querySelector("#bd-panel [data-act='toggle-select-item'][data-save-url='https://e.test/4']").click();
+      const fifthDisabled = document.querySelector("#bd-panel [data-act='toggle-select-item'][data-save-url='https://e.test/5']").disabled;
+      const playSelLabel = document.querySelector("#bd-panel [data-act='play-selected']").textContent;
+      document.querySelector("#bd-panel [data-act='play-selected']").click();
+      // Delete non-empty folder requires confirmation click.
+      const del1 = document.querySelector("#bd-panel [data-act='delete-folder']");
+      del1.click();
+      const confirmTxt = document.querySelector("#bd-panel [data-act='delete-folder']").textContent;
+      document.querySelector("#bd-panel [data-act='delete-folder']").click();
+      const pillsAfterDel = Array.from(document.querySelectorAll("#bd-panel .bd-folder-pill")).map((p) => p.textContent);
+      return {cmds, starSaved, pillTexts, fifthDisabled, playSelLabel, confirmTxt, pillsAfterDel};
+    })()""",
+)
+assert folder_res["starSaved"] is True, folder_res
+assert "Study (5)" in folder_res["pillTexts"] and "Lofi (1)" in folder_res["pillTexts"], folder_res
+assert folder_res["fifthDisabled"] is True and folder_res["playSelLabel"] == "Play selected (4/4)", folder_res
+assert any(c == 'backdrop:set:{"play_urls":["https://e.test/1","https://e.test/2","https://e.test/3","https://e.test/4"]}' for c in folder_res["cmds"]), folder_res
+assert "Confirm delete" in folder_res["confirmTxt"] and folder_res["pillsAfterDel"] == ["Lofi (1)"], folder_res
+assert any(c == 'backdrop:set:{"delete_folder":"Study"}' for c in folder_res["cmds"]), folder_res
+
 print("web ok")

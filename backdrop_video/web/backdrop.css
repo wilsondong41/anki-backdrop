@@ -133,8 +133,8 @@
   margin: 20px auto;
   box-sizing: border-box;
   border: 1px solid var(--bd-plate-border, rgba(128, 128, 128, 0.18));
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.16);
-  transition: opacity 0.3s;
+  box-shadow: var(--bd-plate-shadow, 0 8px 32px rgba(0, 0, 0, 0.16));
+  transition: opacity 0.3s, border-color 0.25s, box-shadow 0.25s;
 }
 
 :root.bd-on.bd-plate:not(.bd-nopic) #qa::before {
@@ -144,8 +144,8 @@
   z-index: -1;
   border-radius: inherit;
   background: rgba(var(--bd-plate-rgb, 44, 44, 44), var(--bd-plate-alpha, 0.68));
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: var(--bd-glass-filter, blur(14px) saturate(1.15));
+  backdrop-filter: var(--bd-glass-filter, blur(14px) saturate(1.15));
   pointer-events: none;
   transition: background-color 0.25s;
 }
@@ -168,9 +168,17 @@
 :root.bd-on.bd-on:not(.bd-nopic):not(.bd-plate) .onigiri-ankimon-team-widget,
 :root.bd-on.bd-on.bd-stock-over:not(.bd-nopic) body > center {
   background: rgba(var(--bd-plate-rgb, 44, 44, 44), var(--bd-plate-alpha, 0.68)) !important;
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  backdrop-filter: blur(14px) saturate(1.15);
-  transition: opacity 0.3s, background-color 0.25s;
+  -webkit-backdrop-filter: var(--bd-glass-filter, blur(14px) saturate(1.15));
+  backdrop-filter: var(--bd-glass-filter, blur(14px) saturate(1.15));
+  transition: opacity 0.3s, background-color 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+
+:root.bd-true-trans.bd-on:not(.bd-nopic):not(.bd-plate) .stats-container,
+:root.bd-true-trans.bd-on:not(.bd-nopic):not(.bd-plate) .white-box,
+:root.bd-true-trans.bd-on:not(.bd-nopic):not(.bd-plate) .congrats-card,
+:root.bd-true-trans.bd-on:not(.bd-nopic):not(.bd-plate) .onigiri-ankimon-team-widget {
+  border-color: var(--bd-plate-border, transparent) !important;
+  box-shadow: var(--bd-plate-shadow, none) !important;
 }
 
 :root.bd-on.bd-on.bd-stock-over:not(.bd-nopic) body > center {
@@ -180,7 +188,7 @@
   margin: 24px auto;
   box-sizing: border-box;
   border: 1px solid var(--bd-plate-border, rgba(128, 128, 128, 0.18));
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--bd-plate-shadow, 0 8px 32px rgba(0, 0, 0, 0.16));
 }
 
 /* Software rendering: blur costs a whole CPU core, so the video is only faded and glass blur is off. Must stay above the peek rule. */
@@ -452,6 +460,23 @@
   accent-color: var(--bd-accent);
 }
 
+#bd-panel .bd-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 8px;
+  font-size: 12px;
+  color: var(--bd-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+#bd-panel .bd-check input {
+  width: auto;
+  accent-color: var(--bd-accent);
+  cursor: pointer;
+}
+
 #bd-panel .bd-seek[hidden] {
   display: none;
 }
@@ -596,8 +621,185 @@
   background: var(--bd-line);
 }
 
-#bd-panel .bd-slot-btn.bd-muted {
+#bd-panel .bd-slot-btn.bd-muted,
+#bd-panel .bd-star.bd-saved {
   color: var(--bd-accent);
+}
+
+#bd-panel .bd-save-pop {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--bd-line);
+  border-radius: 8px;
+  background: var(--bd-hover);
+}
+
+#bd-panel .bd-save-pop[hidden] {
+  display: none;
+}
+
+#bd-panel .bd-save-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bd-dim);
+  margin-bottom: 5px;
+}
+
+#bd-panel .bd-save-form,
+#bd-panel .bd-new-folder-form {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+#bd-panel .bd-save-form input,
+#bd-panel .bd-new-folder-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: inherit;
+  background: var(--bd-bg);
+  border: 1px solid var(--bd-line);
+  border-radius: 6px;
+}
+
+#bd-panel .bd-save-form button,
+#bd-panel .bd-new-folder-form button {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: var(--bd-accent);
+  color: #ffffff;
+}
+
+#bd-panel .bd-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 3px;
+}
+
+#bd-panel .bd-sec-head .bd-label {
+  margin: 0;
+}
+
+#bd-panel .bd-sec-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#bd-panel .bd-sec-btn {
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid var(--bd-line);
+  border-radius: 6px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-sec-btn:hover {
+  background: var(--bd-hover);
+  color: var(--bd-fg);
+}
+
+#bd-panel .bd-sec-btn.bd-active {
+  color: var(--bd-accent);
+  border-color: var(--bd-accent);
+  font-weight: 600;
+}
+
+#bd-panel .bd-folder-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+#bd-panel .bd-folder-pill {
+  max-width: 100%;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--bd-line);
+  border-radius: 999px;
+  color: var(--bd-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bd-panel .bd-folder-pill:hover {
+  background: var(--bd-hover);
+  color: var(--bd-fg);
+}
+
+#bd-panel .bd-folder-pill.bd-active {
+  color: var(--bd-accent);
+  border-color: var(--bd-accent);
+  font-weight: 600;
+}
+
+#bd-panel .bd-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+#bd-panel .bd-play-sel {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  background: var(--bd-accent);
+  color: #ffffff;
+}
+
+#bd-panel .bd-folder-body {
+  margin-top: 6px;
+  padding: 4px;
+  border: 1px solid var(--bd-line);
+  border-radius: 8px;
+}
+
+#bd-panel .bd-folder-empty {
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-selectable {
+  width: 100%;
+  font-size: 12px;
+}
+
+#bd-panel .bd-selectable.bd-selected {
+  color: var(--bd-accent);
+  background: var(--bd-hover);
+  font-weight: 600;
+}
+
+#bd-panel .bd-del-folder {
+  display: block;
+  margin: 4px 0 0 auto;
+  padding: 2px 6px;
+  font-size: 10px;
+  border-radius: 4px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-del-folder:hover {
+  background: var(--bd-hover);
+  color: var(--bd-fg);
+}
+
+#bd-panel .bd-del-folder.bd-danger {
+  color: #ef4444;
+  font-weight: 600;
 }
 
 #bd-panel .bd-label {

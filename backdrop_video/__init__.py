@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 from aqt import gui_hooks, mw
 from aqt.overview import Overview
-from aqt.qt import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+from aqt.qt import (QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                     QSlider, Qt, QVBoxLayout)
 from aqt.reviewer import Reviewer
 from aqt.utils import askUser, tooltip
@@ -25,9 +25,12 @@ STREAM_SITES = re.compile(r"(^|\.)(youtube\.com|twitch\.tv|kick\.com)$")  # wort
 YT_ID = re.compile(r"(?:youtu\.be/|/embed/|/shorts/|/live/|[?&]v=)([\w-]{11})")
 
 MAX_STREAMS = 4
-DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70, "volume": 50,
-            "time": 0, "paused": False, "picture": True, "panel": False, "quality": "auto", "multi_fps": "auto",
-            "suppress_ytdlp_prompt": False, "title": "", "recent": []}
+MAX_FOLDERS = 30
+MAX_FOLDER_ITEMS = 50
+DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70,
+            "true_transparency": False, "volume": 50, "time": 0, "paused": False, "picture": True,
+            "panel": False, "quality": "auto", "multi_fps": "auto", "suppress_ytdlp_prompt": False,
+            "title": "", "recent": [], "folders": []}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 _dialog = None
@@ -108,25 +111,148 @@ def active_urls(c: dict = None) -> list:
     return out
 
 
+def _sanitize_folders(raw) -> list:
+    if not isinstance(raw, list):
+        return []
+    out, seen_names = [], set()
+    for f in raw:
+        if not isinstance(f, dict):
+            continue
+        name = (f.get("name") or "").strip()[:40] if isinstance(f.get("name"), str) else ""
+        if not name or name.lower() in seen_names:
+            continue
+        seen_names.add(name.lower())
+        items, seen_urls = [], set()
+        for it in (f.get("items") or []):
+            if not isinstance(it, dict):
+                continue
+            u = it.get("url", "").strip() if isinstance(it.get("url"), str) else ""
+            if not u or len(u) > 2000 or u in seen_urls:
+                continue
+            seen_urls.add(u)
+            t = it.get("title", "").strip()[:300] if isinstance(it.get("title"), str) else ""
+            items.append({"url": u, "title": t})
+            if len(items) >= MAX_FOLDER_ITEMS:
+                break
+        out.append({"name": name, "items": items})
+        if len(out) >= MAX_FOLDERS:
+            break
+    return out
+
+
 def _recent_title(c: dict, url: str) -> str:
     if url == c.get("url") and c.get("title"):
         return c["title"]
     for r in c.get("recent") or []:
-        if r.get("url") == url:
+        if r.get("url") == url and r.get("title"):
             return r.get("title", "")
+    for f in _sanitize_folders(c.get("folders")):
+        for it in f["items"]:
+            if it["url"] == url and it["title"]:
+                return it["title"]
     return ""
 
 
 def _remember_recent(c: dict, url: str, title: str = "") -> list:
     current = [{"url": c["url"], "title": c["title"]}] if c.get("url") else []  # may predate the recent list
     known = [r for r in c.get("recent", []) + current if r.get("url") == url]
-    title = title or (known[0].get("title", "") if known else "")
+    title = title or (known[0].get("title", "") if known else "") or _recent_title(c, url)
     rest, seen = [], {url}
     for r in current + c.get("recent", []):
         if r.get("url") not in seen:
             seen.add(r["url"])
             rest.append(r)
     return ([{"url": url, "title": title}] + rest)[:5]
+
+
+def create_folder(name: str) -> bool:
+    name = (name or "").strip()[:40] if isinstance(name, str) else ""
+    if not name:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    if any(f["name"].lower() == name.lower() for f in folders) or len(folders) >= MAX_FOLDERS:
+        return False
+    folders.append({"name": name, "items": []})
+    save(folders=folders)
+    return True
+
+
+def delete_folder(name: str) -> bool:
+    name = (name or "").strip() if isinstance(name, str) else ""
+    if not name:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    kept = [f for f in folders if f["name"].lower() != name.lower()]
+    if len(kept) == len(folders):
+        return False
+    save(folders=kept)
+    return True
+
+
+def save_to_folder(folder_name: str, url: str, title: str = "") -> bool:
+    folder_name = (folder_name or "").strip()[:40] if isinstance(folder_name, str) else ""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    if not folder_name or not url or len(url) > 2000:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    title = (title.strip()[:300] if isinstance(title, str) else "") or _recent_title(c, url)
+    target = next((f for f in folders if f["name"].lower() == folder_name.lower()), None)
+    if target is None:
+        if len(folders) >= MAX_FOLDERS:
+            return False
+        target = {"name": folder_name, "items": []}
+        folders.append(target)
+    existing = next((it for it in target["items"] if it["url"] == url), None)
+    if existing is not None:
+        if title and not existing["title"]:
+            existing["title"] = title
+    else:
+        if len(target["items"]) >= MAX_FOLDER_ITEMS:
+            return False
+        target["items"].insert(0, {"url": url, "title": title})
+    save(folders=folders)
+    return True
+
+
+def remove_from_folder(folder_name: str, url: str) -> bool:
+    folder_name = (folder_name or "").strip() if isinstance(folder_name, str) else ""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    if not folder_name or not url:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    changed = False
+    for f in folders:
+        if f["name"].lower() == folder_name.lower():
+            before = len(f["items"])
+            f["items"] = [it for it in f["items"] if it["url"] != url]
+            changed = len(f["items"]) != before
+            break
+    if changed:
+        save(folders=folders)
+    return changed
+
+
+def _norm_url(url: str) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def _browse_start_url(c: dict = None) -> str:
+    """Avoid reopening a video that is already playing in the backdrop; open its site home page instead."""
+    c = c or conf()
+    last = (_last_browse_url or "https://www.youtube.com").strip()
+    if not last.lower().startswith(("http://", "https://")):
+        return "https://www.youtube.com"
+    playing = {_norm_url(u) for u in active_urls(c)} if c.get("on") else set()
+    if _norm_url(last) in playing:
+        parsed = urlparse(last)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}/"
+        return "https://www.youtube.com"
+    return last
 
 
 def _stream_spec(url: str, start: int, paused: bool, title: str = "") -> dict:
@@ -137,6 +263,9 @@ def _stream_spec(url: str, start: int, paused: bool, title: str = "") -> dict:
         STREAM_SITES.search(urlparse(spec["src"]).hostname or "") or LIVE_MEDIA.search(urlparse(spec["src"]).path)
     ):
         spec["src"] = "about:blank"  # framed sites or raw manifests won't play directly; live.py replaces this once ready
+    fps = live.stream_fps(url)
+    if fps:
+        spec["fps"] = fps
     return spec
 
 
@@ -233,11 +362,15 @@ def exit_break() -> None:
 def state(plate: bool) -> dict:
     c = conf()
     urls = active_urls(c)
-    s = {k: c[k] for k in ("url", "strength", "plate_opacity", "volume", "paused", "picture", "panel", "quality", "title", "recent")}
+    s = {k: c[k] for k in ("url", "strength", "plate_opacity", "true_transparency", "volume", "paused", "picture", "panel", "quality", "title", "recent")}
+    s["folders"] = _sanitize_folders(c.get("folders"))
     s["urls"] = urls
     s["muted"] = [u for u in (c.get("muted") or []) if isinstance(u, str) and u in urls]
     s["break_info"] = _break_info()
-    s["auto_note"] = live.effective_note(c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"))
+    s["auto_note"] = live.effective_note(
+        c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
+        fps_list=live.active_fps(urls) if c["on"] else None,
+    )
     s.update(on=bool(c["on"] and urls), plate=plate, lite=software_rendering(), streams=[])
     if s["on"]:
         streams = [
@@ -322,6 +455,16 @@ def on_js_message(handled, message, context):
         except ValueError:
             pass
         set_title(raw_t[:300])
+        return True, None
+    if message.startswith("backdrop:fps:"):
+        try:
+            payload = json.loads(message.split(":", 2)[2])
+            if isinstance(payload, dict) and isinstance(payload.get("url"), str):
+                fps_val = payload.get("fps")
+                if isinstance(fps_val, (int, float)) and not isinstance(fps_val, bool) and math.isfinite(fps_val) and 0 < fps_val <= 240:
+                    live.set_fps(payload["url"], fps_val)
+        except (ValueError, TypeError):
+            pass
         return True, None
     if message == "backdrop:clip":
         mw.web.eval("window.backdrop && backdrop.offer(%s)" % json.dumps(clipboard_link()))
@@ -450,6 +593,15 @@ def set_title(title: str, url: str = None) -> None:
     c = conf()
     target = url or c["url"]
     changes = {"recent": [{**r, "title": title} if r.get("url") == target else r for r in c["recent"]]}
+    folders = _sanitize_folders(c.get("folders"))
+    folder_changed = False
+    for f in folders:
+        for it in f["items"]:
+            if it["url"] == target and it["title"] != title:
+                it["title"] = title
+                folder_changed = True
+    if folder_changed:
+        changes["folders"] = folders
     if target == c["url"]:
         changes["title"] = title
     save(**changes)
@@ -489,6 +641,39 @@ def play_url(url: str) -> None:
     recent = _remember_recent(c, url)
     title = recent[0]["title"]
     save(url=url, urls=[url], muted=[], on=True, paused=False, title=title, recent=recent)
+
+
+def play_urls(urls: list) -> bool:
+    """Start 1–4 links together in multi-view, remembering them in recent."""
+    global position
+    cleaned, seen = [], set()
+    for raw in (urls or []):
+        if isinstance(raw, str):
+            u = raw.strip()
+            if u and len(u) <= 2000 and u not in seen:
+                seen.add(u)
+                cleaned.append(u)
+                if len(cleaned) >= MAX_STREAMS:
+                    break
+    if not cleaned:
+        return False
+    if len(cleaned) == 1:
+        play_url(cleaned[0])
+        return True
+    c = conf()
+    keep = set(cleaned)
+    for prev in active_urls(c):
+        if prev not in keep:
+            live.forget(prev)
+    recent = list(c.get("recent") or [])
+    for u in reversed(cleaned):
+        _not_live.discard(u)
+        _declined_urls.discard(u)
+        recent = _remember_recent({**c, "recent": recent}, u)
+    position = 0.0
+    primary = cleaned[0]
+    save(url=primary, urls=cleaned, muted=[], on=True, paused=False, title=_recent_title({**c, "recent": recent}, primary), recent=recent)
+    return True
 
 
 def add_url(url: str) -> bool:
@@ -563,6 +748,10 @@ def apply(changes: dict) -> None:
     url = raw_url.strip() if isinstance(raw_url, str) and 0 < len(raw_url.strip()) <= 2000 else ""
     if url:
         play_url(url)
+    played_multi = False
+    raw_multi = changes.get("play_urls")
+    if isinstance(raw_multi, list):
+        played_multi = play_urls(raw_multi)
     raw_add = changes.get("add_url")
     added_url = raw_add.strip() if isinstance(raw_add, str) and 0 < len(raw_add.strip()) <= 2000 else ""
     if added_url:
@@ -576,8 +765,28 @@ def apply(changes: dict) -> None:
     forgot_recent = raw_forget.strip() if isinstance(raw_forget, str) and raw_forget.strip() else ""
     if forgot_recent:
         c = conf()
-        save(recent=[r for r in (c.get("recent") or []) if r.get("url") != forgot_recent])
-    flags = {k: v for k, v in changes.items() if k in ("on", "paused", "picture", "panel") and isinstance(v, bool)}
+        rec = [r for r in (c.get("recent") or []) if (r.get("url") or "").strip() != forgot_recent]
+        forget_changes = {"recent": rec}
+        if not c.get("on") and (c.get("url") or "").strip() == forgot_recent:
+            forget_changes.update(url="", urls=[], title="")
+        save(**forget_changes)
+    folder_changed = False
+    if isinstance(changes.get("create_folder"), str):
+        folder_changed = create_folder(changes["create_folder"]) or folder_changed
+    if isinstance(changes.get("delete_folder"), str):
+        folder_changed = delete_folder(changes["delete_folder"]) or folder_changed
+    save_item = changes.get("save_item")
+    if isinstance(save_item, dict):
+        folder_changed = save_to_folder(
+            save_item.get("folder", ""), save_item.get("url", ""), save_item.get("title", "")
+        ) or folder_changed
+    unsave_item = changes.get("unsave_item")
+    if isinstance(unsave_item, dict):
+        folder_changed = remove_from_folder(
+            unsave_item.get("folder", ""), unsave_item.get("url", "")
+        ) or folder_changed
+    flags = {k: v for k, v in changes.items()
+             if k in ("on", "paused", "picture", "panel", "true_transparency") and isinstance(v, bool)}
     if flags.get("on"):
         flags["paused"] = False
     numbers = {k: max(0, min(100, int(v))) for k, v in changes.items()
@@ -588,9 +797,13 @@ def apply(changes: dict) -> None:
         active = set(active_urls())
         extra["muted"] = [u for u in changes["muted"] if isinstance(u, str) and u in active][:MAX_STREAMS]
     save(**flags, **numbers, **extra)
+    if _dialog is not None and "true_transparency" in flags:
+        _dialog.true_transparency.blockSignals(True)
+        _dialog.true_transparency.setChecked(flags["true_transparency"])
+        _dialog.true_transparency.blockSignals(False)
     target_new = url or added_url
-    if target_new or removed_url or forgot_recent or "on" in flags:
-        refresh(ask_live=bool(target_new), only_url=target_new or None)
+    if target_new or played_multi or removed_url or forgot_recent or folder_changed or "on" in flags:
+        refresh(ask_live=bool(target_new or played_multi), only_url=None if played_multi else (target_new or None))
     quality = changes.get("quality")
     if isinstance(quality, str) and quality in VALID_QUALITIES:
         set_quality(quality)
@@ -598,6 +811,11 @@ def apply(changes: dict) -> None:
 
 def refresh(ask_live: bool = False, only_url: str = None) -> None:
     """Apply settings to the page on screen without reloading it."""
+    if _browse is not None and hasattr(_browse, "_sync_buttons"):
+        try:
+            _browse._sync_buttons()
+        except Exception:
+            pass
     if mw.state in ("review", "overview"):
         allow_autoplay()
         s = state(mw.state == "review")
@@ -662,6 +880,10 @@ class BackdropDialog(QDialog):
         self.strength.setAccessibleName("Backdrop strength")
         self.plate_opacity = self.slider(c["plate_opacity"], lambda v: self.live(plate_opacity=v))
         self.plate_opacity.setAccessibleName("Study card opacity")
+        self.true_transparency = QCheckBox("True transparency")
+        self.true_transparency.setChecked(bool(c.get("true_transparency")))
+        self.true_transparency.setToolTip("Also fade study card blur and border as you slide Study card down.")
+        self.true_transparency.toggled.connect(lambda v: self.live(true_transparency=bool(v)))
         self.volume = self.slider(c["volume"], lambda v: self.live(volume=v))
         self.volume.setAccessibleName("Volume")
         self.quality = QComboBox()
@@ -704,11 +926,17 @@ class BackdropDialog(QDialog):
         form.addRow("Video link", self.link)
         form.addRow("Backdrop", self.labelled(self.strength, "Faint", "Clear"))
         form.addRow("Study card", self.labelled(self.plate_opacity, "Clear", "Solid"))
+        form.addRow("", self.true_transparency)
         form.addRow("Volume", self.volume)
         form.addRow("Stream quality", self.quality)
         form.addRow("Stream helper", self.helper_btn)
+        urls = active_urls(c)
+        note = live.effective_note(
+            c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
+            fps_list=live.active_fps(urls) if c["on"] else None,
+        )
         hint = QLabel(
-            f"Plays behind your cards and on the study screen ({live.effective_note(c['quality'], max(1, len(active_urls(c))), multi_fps=c.get('multi_fps', 'auto'))}). "
+            f"Plays behind your cards and on the study screen ({note}). "
             "Edge tab has quick controls. Hold P to peek."
         )
         hint.setWordWrap(True)
@@ -797,15 +1025,18 @@ def open_dialog() -> None:
 
 
 def open_browse() -> None:
-    """Built-in browser pop-up with quick site shortcuts, smart search, and Play / + Add buttons."""
+    """Built-in tabbed browser pop-up with smart search, Save to folder, and safe + Add / Replace buttons."""
     global _browse, _last_browse_url
     if _browse is not None:
+        if hasattr(_browse, "_sync_buttons"):
+            _browse._sync_buttons()
         _browse.show()
         _browse.raise_()
         _browse.activateWindow()
         return
     try:
-        from aqt.qt import QUrl
+        from aqt.qt import QInputDialog, QMenu, QTabWidget, QToolButton, QUrl
+        from PyQt6.QtWebEngineCore import QWebEnginePage
         from PyQt6.QtWebEngineWidgets import QWebEngineView
     except Exception:
         tooltip("Built-in browser isn't available in this Qt build.", period=4000)
@@ -814,7 +1045,101 @@ def open_browse() -> None:
     dlg = QDialog(mw)
     dlg.setWindowTitle("Backdrop Video — Find a Video or Stream")
     dlg.resize(980, 680)
-    view = QWebEngineView(dlg)
+
+    tabs = QTabWidget(dlg)
+    tabs.setTabsClosable(True)
+    tabs.setMovable(True)
+    tabs.setDocumentMode(True)
+
+    def current_view():
+        w = tabs.currentWidget()
+        return w if isinstance(w, QWebEngineView) else None
+
+    def _silence_view(v) -> None:
+        if v is None:
+            return
+        try:
+            v.page().runJavaScript("document.querySelectorAll('video,audio').forEach(m=>{try{m.pause();m.muted=true;}catch(e){}})")
+        except Exception:
+            pass
+
+    def _tab_label(title: str, url: str = "") -> str:
+        t = (title or "").strip()
+        if not t and url:
+            t = urlparse(url).hostname or url
+        t = t or "New Tab"
+        return (t[:22] + "…") if len(t) > 23 else t
+
+    class _BrowseView(QWebEngineView):
+        def createWindow(self, win_type):
+            if win_type == QWebEnginePage.WebWindowType.WebBrowserBackgroundTab:
+                return open_tab(None, switch=False)
+            if win_type == QWebEnginePage.WebWindowType.WebBrowserTab:
+                return open_tab(None, switch=True)
+            return None
+
+    def open_tab(initial_url: str = None, switch: bool = True):
+        v = _BrowseView(tabs)
+        idx = tabs.addTab(v, _tab_label("", initial_url or ""))
+
+        def on_url(u, view_ref=v):
+            global _last_browse_url
+            s = u.toString()
+            if current_view() is view_ref:
+                addr.setText(s)
+            if s.startswith(("http://", "https://")):
+                _last_browse_url = s
+            ti = tabs.indexOf(view_ref)
+            if ti >= 0 and not view_ref.title().strip():
+                tabs.setTabText(ti, _tab_label("", s))
+                tabs.setTabToolTip(ti, s)
+
+        def on_title(t, view_ref=v):
+            ti = tabs.indexOf(view_ref)
+            if ti >= 0:
+                u = view_ref.url().toString()
+                tabs.setTabText(ti, _tab_label(t, u))
+                tabs.setTabToolTip(ti, f"{t}\n{u}" if u else t)
+
+        v.urlChanged.connect(on_url)
+        v.titleChanged.connect(on_title)
+        if switch:
+            tabs.setCurrentIndex(idx)
+        if initial_url:
+            v.setUrl(QUrl(initial_url))
+            if switch:
+                addr.setText(initial_url)
+        return v
+
+    def _new_tab_url() -> str:
+        v = current_view()
+        if v is not None:
+            s = v.url().toString().strip()
+            if s.startswith(("http://", "https://")):
+                p = urlparse(s)
+                if p.scheme and p.netloc:
+                    return f"{p.scheme}://{p.netloc}/"
+        return _browse_start_url()
+
+    def close_tab(idx: int) -> None:
+        v = tabs.widget(idx)
+        if v is not None:
+            _silence_view(v)
+            try:
+                v.setUrl(QUrl("about:blank"))
+                v.deleteLater()
+            except Exception:
+                pass
+        tabs.removeTab(idx)
+        if tabs.count() == 0:
+            open_tab(_browse_start_url(), switch=True)
+
+    new_tab_b = QToolButton(tabs)
+    new_tab_b.setText("+")
+    new_tab_b.setToolTip("Open a new tab")
+    new_tab_b.clicked.connect(lambda: open_tab(_new_tab_url(), switch=True))
+    tabs.setCornerWidget(new_tab_b, Qt.Corner.TopRightCorner)
+    tabs.tabCloseRequested.connect(close_tab)
 
     sites_bar = QHBoxLayout()
     sites_bar.addWidget(QLabel("Quick jump:"))
@@ -826,9 +1151,13 @@ def open_browse() -> None:
     ):
         btn = QPushButton(label)
         btn.setAutoDefault(False)
-        btn.clicked.connect(lambda _c=False, u=site_url: view.setUrl(QUrl(u)))
+        btn.clicked.connect(lambda _c=False, u=site_url: current_view() and current_view().setUrl(QUrl(u)))
         sites_bar.addWidget(btn)
     sites_bar.addStretch()
+    nt_top = QPushButton("+ New Tab")
+    nt_top.setAutoDefault(False)
+    nt_top.clicked.connect(lambda: open_tab(_new_tab_url(), switch=True))
+    sites_bar.addWidget(nt_top)
 
     bar = QHBoxLayout()
     back_b = QPushButton("←")
@@ -847,37 +1176,67 @@ def open_browse() -> None:
     bar.addWidget(addr, 1)
     bar.addWidget(go_b)
 
-    def add_label() -> str:
-        n = len(active_urls()) if conf()["on"] else 0
-        return f"+ Add to Multi-View ({n}/{MAX_STREAMS})"
-
-    add_b = QPushButton(add_label())
+    status_lbl = QLabel()
+    replace_b = QPushButton("Replace Current")
+    replace_b.setAutoDefault(False)
+    replace_b.setToolTip("Stop current stream(s) and play only this page")
+    save_b = QPushButton("★ Save…")
+    save_b.setAutoDefault(False)
+    save_b.setToolTip("Save this page to a folder without changing what is playing")
+    add_b = QPushButton()
     add_b.setAutoDefault(False)
+    add_b.setStyleSheet("QPushButton { background: #3b82f6; color: #ffffff; font-weight: 600; padding: 5px 12px; border-radius: 6px; }"
+                        "QPushButton:disabled { background: #6b7280; color: #e5e7eb; }")
     play_b = QPushButton("Play This Page")
     play_b.setAutoDefault(False)
     play_b.setDefault(False)
+    play_b.setStyleSheet("QPushButton { background: #3b82f6; color: #ffffff; font-weight: 600; padding: 5px 12px; border-radius: 6px; }")
+
     bottom_bar = QHBoxLayout()
-    bottom_bar.addWidget(QLabel("Navigate to the video/stream page you want, then:"))
+    bottom_bar.addWidget(status_lbl)
     bottom_bar.addStretch()
+    bottom_bar.addWidget(replace_b)
+    bottom_bar.addWidget(save_b)
     bottom_bar.addWidget(add_b)
     bottom_bar.addWidget(play_b)
+
+    def sync_buttons() -> None:
+        c = conf()
+        n = len(active_urls(c)) if c["on"] else 0
+        if n == 0:
+            status_lbl.setText("Nothing playing yet")
+            replace_b.setVisible(False)
+            add_b.setVisible(False)
+            play_b.setVisible(True)
+        else:
+            status_lbl.setText(f"Playing {n}/{MAX_STREAMS} stream" + ("" if n == 1 else "s"))
+            replace_b.setVisible(True)
+            play_b.setVisible(False)
+            add_b.setVisible(True)
+            if n >= MAX_STREAMS:
+                add_b.setEnabled(False)
+                add_b.setText(f"Multi-View Full ({MAX_STREAMS}/{MAX_STREAMS})")
+            else:
+                add_b.setEnabled(True)
+                add_b.setText(f"+ Add to Backdrop ({n}/{MAX_STREAMS})")
 
     lay = QVBoxLayout(dlg)
     lay.addLayout(sites_bar)
     lay.addLayout(bar)
-    lay.addWidget(view, 1)
+    lay.addWidget(tabs, 1)
     lay.addLayout(bottom_bar)
 
     def go():
+        v = current_view()
         txt = addr.text().strip()
-        if not txt:
+        if not v or not txt:
             return
         if txt.lower().startswith(("http://", "https://")):
             url = txt
         elif " " not in txt and "." in txt:
             url = "https://" + txt
         else:
-            host = (view.url().host() or "").lower()
+            host = (v.url().host() or "").lower()
             q = quote_plus(txt)
             if "youtube.com" in host or "youtu.be" in host:
                 url = f"https://www.youtube.com/results?search_query={q}"
@@ -887,54 +1246,115 @@ def open_browse() -> None:
                 url = f"https://kick.com/search?query={q}"
             else:
                 url = f"https://www.google.com/search?q={q}"
-        view.setUrl(QUrl(url))
+        v.setUrl(QUrl(url))
 
-    def _silence_popup():
-        view.page().runJavaScript("document.querySelectorAll('video,audio').forEach(m=>{try{m.pause();m.muted=true;}catch(e){}})")
+    def _current_page_info() -> tuple:
+        v = current_view()
+        if v is None:
+            return "", ""
+        url = v.url().toString().strip()
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return "", ""
+        return url, (v.title() or "").strip()
+
+    def save_current_to(folder_name: str) -> bool:
+        url, title = _current_page_info()
+        if not url:
+            return False
+        if save_to_folder(folder_name, url, title):
+            refresh()
+            tooltip(f"Saved to {folder_name}", period=3000)
+            return True
+        return False
+
+    def open_save_menu() -> None:
+        url, _ = _current_page_info()
+        if not url:
+            tooltip("Open a video or stream page first.", period=3000)
+            return
+        menu = QMenu(save_b)
+        folders = _sanitize_folders(conf().get("folders"))
+        for f in folders:
+            has = any(it["url"] == url for it in f["items"])
+            act = menu.addAction(f"✓ {f['name']}" if has else f["name"])
+            act.triggered.connect(lambda _c=False, fn=f["name"]: save_current_to(fn))
+        if folders:
+            menu.addSeparator()
+        new_act = menu.addAction("+ New folder…")
+
+        def prompt_new():
+            name, ok = QInputDialog.getText(dlg, "New Folder", "Folder name:")
+            if ok and name.strip():
+                save_current_to(name.strip())
+
+        new_act.triggered.connect(prompt_new)
+        menu.exec(save_b.mapToGlobal(save_b.rect().topLeft()))
 
     def pick(replace: bool):
-        url = view.url().toString().strip()
-        if not url or not url.lower().startswith(("http://", "https://")):
+        v = current_view()
+        url, _ = _current_page_info()
+        if not v or not url:
             return
-        _silence_popup()
+        _silence_view(v)
         if replace:
             play_url(url)
             refresh(ask_live=True)
-            dlg.accept()
+            sync_buttons()
+            if tabs.count() <= 1:
+                dlg.accept()
+            else:
+                tooltip("Now playing this page in backdrop.", period=3000)
         elif add_url(url):
-            add_b.setText(add_label())
             refresh(ask_live=True, only_url=url)
+            sync_buttons()
             tooltip(f"Added to backdrop ({len(active_urls())}/{MAX_STREAMS})", period=3000)
         else:
             tooltip(f"Already playing {MAX_STREAMS} videos (or this link is already active).", period=4000)
 
-    def _on_url(u):
-        global _last_browse_url
-        s = u.toString()
-        addr.setText(s)
-        if s.startswith(("http://", "https://")):
-            _last_browse_url = s
+    def on_tab_changed(_idx: int) -> None:
+        v = current_view()
+        addr.setText(v.url().toString() if v is not None else "")
 
-    back_b.clicked.connect(view.back)
-    fwd_b.clicked.connect(view.forward)
-    rel_b.clicked.connect(view.reload)
+    tabs.currentChanged.connect(on_tab_changed)
+    back_b.clicked.connect(lambda: current_view() and current_view().back())
+    fwd_b.clicked.connect(lambda: current_view() and current_view().forward())
+    rel_b.clicked.connect(lambda: current_view() and current_view().reload())
     addr.returnPressed.connect(go)
     go_b.clicked.connect(go)
     play_b.clicked.connect(lambda: pick(True))
+    replace_b.clicked.connect(lambda: pick(True))
     add_b.clicked.connect(lambda: pick(False))
-    view.urlChanged.connect(_on_url)
+    save_b.clicked.connect(open_save_menu)
 
     def cleanup(_res):
-        global _browse
+        global _browse, _last_browse_url
+        v_cur = current_view()
+        if v_cur is not None:
+            s = v_cur.url().toString().strip()
+            if s.startswith(("http://", "https://")):
+                _last_browse_url = s
         _browse = None
-        try:
-            view.setUrl(QUrl("about:blank"))
-            view.deleteLater()
-        except Exception:
-            pass
+        for i in range(tabs.count() - 1, -1, -1):
+            w = tabs.widget(i)
+            _silence_view(w)
+            try:
+                w.setUrl(QUrl("about:blank"))
+                w.deleteLater()
+            except Exception:
+                pass
 
     dlg.finished.connect(cleanup)
-    view.setUrl(QUrl(_last_browse_url or "https://www.youtube.com"))
+    dlg._tabs = tabs
+    dlg._open_tab = open_tab
+    dlg._close_tab = close_tab
+    dlg._sync_buttons = sync_buttons
+    dlg._save_btn = save_b
+    dlg._add_btn = add_b
+    dlg._replace_btn = replace_b
+    dlg._play_btn = play_b
+    dlg._save_current_to = save_current_to
+    open_tab(_browse_start_url(), switch=True)
+    sync_buttons()
     _browse = dlg
     dlg.show()
     dlg.raise_()

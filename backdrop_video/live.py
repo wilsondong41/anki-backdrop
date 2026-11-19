@@ -26,6 +26,7 @@ _server = None
 _token = secrets.token_hex(8)  # other local web pages can't guess the stream address
 _links = {}  # page link -> stream id; a fresh id per lookup, so a retry reloads the player
 _streams = {}  # stream id -> (video url, audio url or None, http headers dict)
+_fps = {}  # page link -> detected/effective integer fps
 _procs = set()  # running converters; mpv outlives Anki unless stopped
 
 
@@ -69,12 +70,42 @@ def _ensure_mpv(quality: str = "auto") -> str:
     return str(quality) if str(quality) in QUALITY_HEIGHT else "auto"
 
 
-def _store_stream(link: str, video: str, audio, headers: dict, quality: str, max_fps: int = 0) -> None:
+def _store_stream(link: str, video: str, audio, headers: dict, quality: str, max_fps: int = 0, fps=None) -> None:
     sid = secrets.token_hex(4)
     with _lock:
         _streams[sid] = (video, audio, headers, quality, max_fps)
         _links[link] = sid
+        if isinstance(fps, (int, float)) and fps > 0:
+            _fps[link] = int(round(fps))
+        else:
+            _fps.pop(link, None)
     address(link)  # start the server off the main thread
+
+
+def set_fps(link: str, fps) -> None:
+    if not link or not isinstance(fps, (int, float)) or fps <= 0:
+        return
+    with _lock:
+        _fps[link] = int(round(fps))
+
+
+def stream_fps(link: str):
+    with _lock:
+        return _fps.get(link)
+
+
+def active_fps(urls: list) -> list:
+    with _lock:
+        return [_fps[u] for u in (urls or []) if u in _fps and _fps[u]]
+
+
+def _format_fps_list(fps_list) -> str:
+    vals = sorted({int(round(f)) for f in (fps_list or []) if isinstance(f, (int, float)) and f > 0})
+    if not vals:
+        return ""
+    if len(vals) == 1:
+        return f"{vals[0]} fps"
+    return f"{vals[0]}–{vals[-1]} fps"
 
 
 def adaptive_fps(stream_count: int = 1, video_help: str = "", multi_fps="auto") -> int:
@@ -102,18 +133,23 @@ def adaptive_fps(stream_count: int = 1, video_help: str = "", multi_fps="auto") 
     return max(30, min(60, cap))
 
 
-def effective_note(quality: str = "auto", stream_count: int = 1, multi_fps="auto") -> str:
-    """Short unobtrusive status showing what resolution and FPS cap Auto/stream conversion uses."""
+def effective_note(quality: str = "auto", stream_count: int = 1, multi_fps="auto", fps_list=None) -> str:
+    """Short unobtrusive status showing what resolution and FPS Auto/stream conversion uses."""
     vhelp = (_codec_help or ("", ""))[0]
     heavy = bool(vhelp) and not re.search(r"--ovc=libvpx\s", vhelp)
     fps = adaptive_fps(stream_count, vhelp, multi_fps=multi_fps)
-    fps_txt = "source fps" if fps == 0 else ("up to 60 fps" if fps >= 60 else f"up to {fps} fps")
+    measured = _format_fps_list(fps_list)
     q = str(quality) if str(quality) in QUALITY_HEIGHT else "auto"
     if q == "auto":
         res = "360p" if (heavy or stream_count >= 2) else "480p"
+        fps_txt = measured or ("uncapped fps" if fps == 0 else ("up to 60 fps" if fps >= 60 else f"up to {fps} fps"))
         return f"Auto: {res}, {fps_txt}"
     label = "4K" if q == "2160" else f"{q}p"
-    return f"{label}, {fps_txt}" if stream_count >= 2 else f"{label}, source fps"
+    if measured:
+        return f"{label}, {measured}"
+    if stream_count >= 2 and fps > 0:
+        return f"{label}, {'up to 60 fps' if fps >= 60 else f'up to {fps} fps'}"
+    return label
 
 
 def register_direct(link: str, quality: str = "auto", stream_count: int = 1, cap_fps: bool = False, multi_fps="auto") -> str:
@@ -152,7 +188,10 @@ def find(folder: str, link: str, quality: str = "auto", stream_count: int = 1, c
     src_fps = parts[0].get("fps") or (info.get("fps") if isinstance(info, dict) else None)
     if fps_cap and (fps_cap >= 60 or (isinstance(src_fps, (int, float)) and 0 < src_fps <= fps_cap)):
         fps_cap = 0  # source already fits under the cap; pass native frames through without duplicating
-    _store_stream(link, video, audio, headers, q, max_fps=fps_cap)
+    known_fps = None
+    if isinstance(src_fps, (int, float)) and src_fps > 0:
+        known_fps = min(round(src_fps), fps_cap) if fps_cap else round(src_fps)
+    _store_stream(link, video, audio, headers, q, max_fps=fps_cap, fps=known_fps)
     if info.get("extractor_key", "").startswith("Twitch") and info.get("description"):
         return f"{info.get('uploader') or info['uploader_id']} · {info['description']}"  # Twitch's title is the channel
     # yt-dlp adds the lookup time to live titles ("... 2026-10-26 01:55").
@@ -185,6 +224,7 @@ def ready(link: str) -> bool:
 def forget(link: str) -> None:
     with _lock:
         _streams.pop(_links.pop(link, None), None)
+        _fps.pop(link, None)
 
 
 def _mpv_cmd_env() -> tuple:
