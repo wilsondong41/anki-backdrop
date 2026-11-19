@@ -548,4 +548,58 @@ _rt_exec("document.querySelector('#bd-panel [data-act=switch-tab][data-tab=libra
 assert _rt_exec("document.querySelector('#bd-panel .bd-pane[data-pane=library]').hidden") is False
 assert _rt_exec("document.querySelector('#bd-panel .bd-buttons [data-act=break] .bd-act-lbl').textContent") == "Break"
 
+# Step E: Multi-video per-slot persistent seek & skip (-10s / +10s / scrub bar / close back to star, mute, X).
+_rt_exec("document.querySelector('#bd-panel [data-act=switch-tab][data-tab=controls]').click();")
+_bv.apply({"play_urls": ["https://youtu.be/aaaaaaaaaa1", "https://youtu.be/aaaaaaaaaa2"]})
+_rt_flush()
+slot_seek_res = _rt_exec("""(() => {
+  // Simulate YouTube duration & currentTime for both slots.
+  const iframes = document.querySelectorAll("#bd-layer iframe");
+  window.dispatchEvent(new MessageEvent("message", {
+    source: iframes[0].contentWindow,
+    data: JSON.stringify({event: "infoDelivery", info: {duration: 600, currentTime: 90}})
+  }));
+  window.dispatchEvent(new MessageEvent("message", {
+    source: iframes[1].contentWindow,
+    data: JSON.stringify({event: "infoDelivery", info: {duration: 400, currentTime: 100}})
+  }));
+  const row2 = document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://youtu.be/aaaaaaaaaa2']");
+  const chipBefore = row2.querySelector(".bd-slot-chip").textContent;
+  // Click the title area (outside star/mute/X) on video 2 to open persistent seek/skip controls.
+  row2.querySelector(".bd-slot-name").click();
+  const row2Open = document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://youtu.be/aaaaaaaaaa2']");
+  const isOpen = row2Open.classList.contains("bd-seek-open");
+  const hasStarWhileOpen = !!row2Open.querySelector("[data-act='open-save']");
+  // Click +10s twice, then -10s once (100 -> 110 -> 120 -> 110).
+  row2Open.querySelector("[data-act='skip-slot'][data-delta='10']").click();
+  row2Open.querySelector("[data-act='skip-slot'][data-delta='10']").click();
+  row2Open.querySelector("[data-act='skip-slot'][data-delta='-10']").click();
+  const timeAfterSkips = row2Open.querySelector(".bd-slot-time").textContent;
+  // Drag slot 2's scrub slider to 250s.
+  const range2 = row2Open.querySelector(".bd-slot-range");
+  range2.value = "250";
+  range2.dispatchEvent(new Event("input", {bubbles: true}));
+  range2.dispatchEvent(new Event("change", {bubbles: true}));
+  const timeAfterScrub = row2Open.querySelector(".bd-slot-time").textContent;
+  return {chipBefore, isOpen, hasStarWhileOpen, timeAfterSkips, timeAfterScrub};
+})()""")
+_rt_flush()
+assert slot_seek_res["chipBefore"] == "1:40", slot_seek_res
+assert slot_seek_res["isOpen"] is True and slot_seek_res["hasStarWhileOpen"] is False, slot_seek_res
+assert slot_seek_res["timeAfterSkips"] == "1:50 / 6:40", slot_seek_res
+assert slot_seek_res["timeAfterScrub"] == "4:10 / 6:40", slot_seek_res
+assert _bv._positions.get("https://youtu.be/aaaaaaaaaa2") == 250.0, _bv._positions
+# Verify seek mode stays open persistently across refresh() and closes back to star/mute/X when clicking the return button.
+_bv.refresh()
+_rt_flush()
+still_open = _rt_exec("document.querySelector(\"#bd-panel .bd-slot-row[data-slot-url='https://youtu.be/aaaaaaaaaa2']\").classList.contains('bd-seek-open')")
+assert still_open is True
+restored_star = _rt_exec("""(() => {
+  const row2 = document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://youtu.be/aaaaaaaaaa2']");
+  row2.querySelector(".bd-seek-close").click();
+  const row2Closed = document.querySelector("#bd-panel .bd-slot-row[data-slot-url='https://youtu.be/aaaaaaaaaa2']");
+  return !row2Closed.classList.contains("bd-seek-open") && !!row2Closed.querySelector("[data-act='open-save']");
+})()""")
+assert restored_star is True
+
 print("web ok")

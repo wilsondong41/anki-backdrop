@@ -56,6 +56,7 @@ def conf() -> dict:
 
 position = float(conf()["time"])  # seconds into the current video, so it resumes after a reload or restart
 _saved_position = position
+_positions = {}  # url -> float seconds into each active video slot
 
 
 def save(**changes) -> None:
@@ -420,7 +421,12 @@ def state(plate: bool) -> dict:
     s.update(on=bool(c["on"] and urls), plate=plate, lite=software_rendering(), streams=[])
     if s["on"]:
         streams = [
-            _stream_spec(u, int(position) if i == 0 and len(urls) == 1 else 0, c["paused"], _recent_title(c, u))
+            _stream_spec(
+                u,
+                int(_positions.get(u, position if i == 0 else 0)),
+                c["paused"],
+                _recent_title(c, u),
+            )
             for i, u in enumerate(urls)
         ]
         s["streams"] = streams
@@ -524,12 +530,30 @@ def on_js_message(handled, message, context):
     if message == "backdrop:break:0":
         exit_break()
         return True, None
+    if message.startswith("backdrop:slot_time:"):
+        try:
+            payload = json.loads(message.split(":", 2)[2])
+            if isinstance(payload, dict) and isinstance(payload.get("url"), str):
+                u = payload["url"].strip()
+                val = float(payload.get("time", 0))
+                if u and math.isfinite(val):
+                    _positions[u] = max(0.0, val)
+                    if u == conf().get("url"):
+                        position = _positions[u]
+                        if abs(position - _saved_position) >= 30:
+                            save_position()
+        except (ValueError, TypeError):
+            pass
+        return True, None
     if not message.startswith("backdrop:time:"):
         return handled
     try:
         val = float(message.split(":", 2)[2])
         if math.isfinite(val):
             position = max(0.0, val)
+            cur_u = conf().get("url")
+            if cur_u:
+                _positions[cur_u] = position
             if abs(position - _saved_position) >= 30:
                 save_position()
     except ValueError:
@@ -682,8 +706,10 @@ def play_url(url: str) -> None:
     for prev in active_urls(c):
         if prev != url:
             live.forget(prev)
+            _positions.pop(prev, None)
     if url != c["url"]:
         position = 0.0
+        _positions.pop(url, None)
     recent = _remember_recent(c, url)
     title = recent[0]["title"]
     save(url=url, urls=[url], muted=[], on=True, paused=False, title=title, recent=recent)
@@ -711,12 +737,13 @@ def play_urls(urls: list) -> bool:
     for prev in active_urls(c):
         if prev not in keep:
             live.forget(prev)
+            _positions.pop(prev, None)
     recent = list(c.get("recent") or [])
     for u in reversed(cleaned):
         _not_live.discard(u)
         _declined_urls.discard(u)
         recent = _remember_recent({**c, "recent": recent}, u)
-    position = 0.0
+    position = float(_positions.get(cleaned[0], 0.0))
     primary = cleaned[0]
     save(url=primary, urls=cleaned, muted=[], on=True, paused=False, title=_recent_title({**c, "recent": recent}, primary), recent=recent)
     return True
@@ -737,6 +764,7 @@ def add_url(url: str) -> bool:
     _not_live.discard(url)
     _declined_urls.discard(url)
     live.forget(url)
+    _positions.pop(url, None)
     new_urls = cur + [url]
     muted = [u for u in (c.get("muted") or []) if u != url and u in new_urls]
     recent = _remember_recent(c, url)
@@ -750,17 +778,19 @@ def remove_url(url: str) -> None:
     c = conf()
     cur = active_urls(c)
     live.forget(url)
+    _positions.pop(url, None)
     new_urls = [u for u in cur if u != url]
     muted = [u for u in (c.get("muted") or []) if u in new_urls]
     if not new_urls:
         position = 0.0
+        _positions.clear()
         save(on=False, url="", urls=[], muted=[], title="")
         if _break_mode:
             exit_break()
         return
     primary = new_urls[0]
     if primary != c["url"]:
-        position = 0.0
+        position = float(_positions.get(primary, 0.0))
     save(url=primary, urls=new_urls, muted=muted, title=_recent_title(c, primary))
 
 

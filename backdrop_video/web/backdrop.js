@@ -5,6 +5,7 @@ window.backdrop = (() => {
   let cfg = null, layer = null, slots = [], time = 0, duration = 0, seeking = false, timer = null, fpsTimer = null, panel = null, breakPill = null;
   let openFolder = null, selectMode = false, savingItem = null, addingFolder = false, confirmDeleteFolder = null, activeTab = null;
   const selectedUrls = new Set();
+  const seekOpenSlots = new Set();
   const ducking = new Set();  // what is talking now: card audio, Read Aloud
   const send = (msg) => { if (typeof pycmd === "function") pycmd(msg); };
   const set = (changes) => send("backdrop:set:" + JSON.stringify(changes));
@@ -65,7 +66,7 @@ window.backdrop = (() => {
     const slot = {
       url: spec.url, kind: spec.kind, src: spec.src, start: spec.start || 0,
       live: !!spec.live, title: spec.title || "", fps: spec.fps || 0, measuredFps: 0, fpsSample: null,
-      el, media: null, ytSynced: false, isLiveStream: false, duration: 0, time: spec.start || 0,
+      el, media: null, ytSynced: false, isLiveStream: false, duration: 0, time: spec.start || 0, seeking: false,
     };
     let media;
     if (spec.kind === "video") {
@@ -85,20 +86,23 @@ window.backdrop = (() => {
         }
         if (!slot.live && Number.isFinite(media.duration) && media.duration > 0) {
           slot.duration = media.duration;
-          if (slots[0] === slot) { duration = slot.duration; updateSeek(); }
+          if (slots[0] === slot) duration = slot.duration;
+          updateSeek();
         }
         applySlotVolume(slot);
       });
       media.addEventListener("durationchange", () => {
         if (!slot.live && Number.isFinite(media.duration) && media.duration > 0) {
           slot.duration = media.duration;
-          if (slots[0] === slot) { duration = slot.duration; updateSeek(); }
+          if (slots[0] === slot) duration = slot.duration;
+          updateSeek();
         }
       });
       media.addEventListener("timeupdate", () => {
-        if (!slot.live && !seeking) {
+        if (!slot.live && !slot.seeking && !(slots[0] === slot && seeking)) {
           slot.time = media.currentTime;
-          if (slots[0] === slot) { time = slot.time; updateSeek(); }
+          if (slots[0] === slot) time = slot.time;
+          updateSeek();
         }
       });
       media.addEventListener("error", () => send((slot.live ? "backdrop:error:stream:" : "backdrop:error:video:") + slot.url));
@@ -159,8 +163,12 @@ window.backdrop = (() => {
       if (layer.children[i] !== el) layer.insertBefore(el, layer.children[i] || null);
     }
     slots = nextSlots;
+    const activeUrls = new Set(slots.map((s) => s.url));
+    for (const u of Array.from(seekOpenSlots)) {
+      if (!activeUrls.has(u)) seekOpenSlots.delete(u);
+    }
     layer.className = "bd-n" + Math.max(1, Math.min(4, slots.length));
-    if (slots.length === 1) {
+    if (slots.length >= 1) {
       duration = slots[0].duration || 0;
       time = slots[0].time || 0;
     } else {
@@ -172,6 +180,7 @@ window.backdrop = (() => {
   function stop() {
     for (const s of slots) unmountSlot(s);
     slots = [];
+    seekOpenSlots.clear();
     if (layer) layer.remove();
     clearInterval(timer);
     clearInterval(fpsTimer);
@@ -306,14 +315,23 @@ window.backdrop = (() => {
       send("backdrop:title:" + JSON.stringify({ url: slot.url, title: slot.title }));
       update();
     }
-    if (info.videoData && info.videoData.isLive) { slot.isLiveStream = true; slot.duration = 0; }
-    else if (!slot.isLiveStream && typeof info.duration === "number" && Number.isFinite(info.duration) && info.duration > 0) {
+    if (info.videoData && info.videoData.isLive) {
+      const wasOpen = seekOpenSlots.delete(slot.url);
+      const changedLive = !slot.isLiveStream;
+      slot.isLiveStream = true;
+      slot.duration = 0;
+      if (wasOpen || changedLive) update();
+    } else if (!slot.isLiveStream && typeof info.duration === "number" && Number.isFinite(info.duration) && info.duration > 0) {
       slot.duration = info.duration;
     }
-    if (typeof info.currentTime === "number" && !seeking) slot.time = info.currentTime;
-    if (slots[0] === slot && (typeof info.currentTime === "number" || typeof info.duration === "number")) {
-      duration = slot.duration;
-      time = slot.time;
+    if (typeof info.currentTime === "number" && !slot.seeking && !(slots[0] === slot && seeking)) {
+      slot.time = info.currentTime;
+    }
+    if (typeof info.currentTime === "number" || typeof info.duration === "number" || (info.videoData && info.videoData.isLive)) {
+      if (slots[0] === slot) {
+        duration = slot.duration;
+        time = slot.time;
+      }
       updateSeek();
     }
     // Captions are a distraction behind a card; the player loads them when playback starts.
@@ -328,11 +346,17 @@ window.backdrop = (() => {
   });
 
   function report() {
-    if (!cfg || !cfg.on || cfg.paused || slots.length !== 1) return;
-    const s = slots[0];
-    if (s.live) return;
-    if (s.kind === "video" && s.media) time = s.media.currentTime;
-    if (time) send("backdrop:time:" + time);
+    if (!cfg || !cfg.on || cfg.paused || !slots.length) return;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      if (s.live || s.isLiveStream) continue;
+      if (s.kind === "video" && s.media) s.time = s.media.currentTime;
+      if (i === 0) time = s.time;
+      if (s.time > 0) {
+        if (i === 0 && slots.length === 1) send("backdrop:time:" + s.time);
+        send("backdrop:slot_time:" + JSON.stringify({ url: s.url, time: s.time }));
+      }
+    }
   }
 
   function snapFps(raw) {
@@ -506,6 +530,21 @@ window.backdrop = (() => {
       if (act === "switch-tab") {
         activeTab = el.dataset.tab === "library" ? "library" : "controls";
         update(true);
+        return;
+      }
+      if (act === "toggle-slot-seek") {
+        const u = el.dataset.slotUrl;
+        const s = slots.find((x) => x.url === u);
+        if (!canSlotSeek(s)) return;
+        seekOpenSlots.has(u) ? seekOpenSlots.delete(u) : seekOpenSlots.add(u);
+        update(true);
+        return;
+      }
+      if (act === "skip-slot") {
+        const u = el.dataset.slotUrl;
+        const s = slots.find((x) => x.url === u);
+        const delta = parseFloat(el.dataset.delta || "0");
+        if (s && Number.isFinite(delta)) seekSlotTo(s, (s.time || 0) + delta);
         return;
       }
       if (act === "mute-slot") {
@@ -1037,43 +1076,131 @@ window.backdrop = (() => {
     const emptyPlay = panel.querySelector(".bd-empty-play");
     if (emptyPlay) emptyPlay.hidden = !!(cfg.on && slots.length >= 1);
     const slotsBox = panel.querySelector(".bd-slots");
-    slotsBox.textContent = "";
-    if (cfg.on && slots.length >= 1) {
-      for (const s of slots) {
-        const row = document.createElement("div");
-        row.className = "bd-slot-row";
-        const name = document.createElement("span");
-        name.className = "bd-slot-name";
-        name.textContent = s.title || shortLink(s.url);
-        name.title = s.title || s.url;
-        const starBtn = document.createElement("button");
-        starBtn.type = "button";
-        starBtn.className = "bd-slot-btn bd-star" + (isSavedUrl(s.url) ? " bd-saved" : "");
-        starBtn.dataset.act = "open-save";
-        starBtn.dataset.saveUrl = s.url;
-        starBtn.dataset.saveTitle = s.title || "";
-        starBtn.title = "Save to folder";
-        starBtn.textContent = "★";
-        const muteBtn = document.createElement("button");
-        muteBtn.type = "button";
-        const muted = isMuted(s.url);
-        muteBtn.className = "bd-slot-btn bd-slot-ico" + (muted ? " bd-muted" : "");
-        muteBtn.dataset.act = "mute-slot";
-        muteBtn.dataset.slotUrl = s.url;
-        muteBtn.title = muted ? "Unmute stream" : "Mute stream";
-        muteBtn.setAttribute("aria-label", muted ? "Unmute stream" : "Mute stream");
-        muteBtn.innerHTML = svg(muted ? "volOff" : "volOn");
-        const rmBtn = document.createElement("button");
-        rmBtn.type = "button";
-        rmBtn.className = "bd-slot-btn";
-        rmBtn.dataset.act = "remove-slot";
-        rmBtn.dataset.slotUrl = s.url;
-        rmBtn.title = "Remove stream";
-        rmBtn.textContent = "×";
-        row.append(name, starBtn, muteBtn, rmBtn);
-        slotsBox.appendChild(row);
+    if (force || !slots.some((s) => s.seeking)) {
+      slotsBox.textContent = "";
+      if (cfg.on && slots.length >= 1) {
+        for (const s of slots) {
+          const seekable = canSlotSeek(s);
+          if (!seekable) seekOpenSlots.delete(s.url);
+          const isSeekOpen = seekable && seekOpenSlots.has(s.url);
+          const row = document.createElement("div");
+          row.className = "bd-slot-row" + (isSeekOpen ? " bd-seek-open" : "");
+          row.dataset.slotUrl = s.url;
+          const top = document.createElement("div");
+          top.className = "bd-slot-top";
+          let name;
+          if (seekable) {
+            name = document.createElement("button");
+            name.type = "button";
+            name.className = "bd-slot-name bd-seekable";
+            name.dataset.act = "toggle-slot-seek";
+            name.dataset.slotUrl = s.url;
+            name.title = isSeekOpen
+              ? "Click to close time controls"
+              : ((s.title || s.url) + " — Click for timestamp & skip controls");
+            const txt = document.createElement("span");
+            txt.className = "bd-slot-title-txt";
+            txt.textContent = s.title || shortLink(s.url);
+            name.appendChild(txt);
+            if (!isSeekOpen) {
+              const chip = document.createElement("span");
+              chip.className = "bd-slot-chip";
+              chip.textContent = (s.duration > 0 || s.time > 0) ? fmtTime(s.time) : "⏱";
+              name.appendChild(chip);
+            }
+          } else {
+            name = document.createElement("span");
+            name.className = "bd-slot-name";
+            name.textContent = s.title || shortLink(s.url);
+            name.title = s.title || s.url;
+          }
+          top.appendChild(name);
+          if (isSeekOpen) {
+            const backBtn = document.createElement("button");
+            backBtn.type = "button";
+            backBtn.className = "bd-slot-btn bd-skip-btn";
+            backBtn.dataset.act = "skip-slot";
+            backBtn.dataset.slotUrl = s.url;
+            backBtn.dataset.delta = "-10";
+            backBtn.title = "Skip back 10 seconds";
+            backBtn.textContent = "-10s";
+            const fwdBtn = document.createElement("button");
+            fwdBtn.type = "button";
+            fwdBtn.className = "bd-slot-btn bd-skip-btn";
+            fwdBtn.dataset.act = "skip-slot";
+            fwdBtn.dataset.slotUrl = s.url;
+            fwdBtn.dataset.delta = "10";
+            fwdBtn.title = "Skip forward 10 seconds";
+            fwdBtn.textContent = "+10s";
+            const closeBtn = document.createElement("button");
+            closeBtn.type = "button";
+            closeBtn.className = "bd-slot-btn bd-seek-close";
+            closeBtn.dataset.act = "toggle-slot-seek";
+            closeBtn.dataset.slotUrl = s.url;
+            closeBtn.title = "Back to star, mute, and remove";
+            closeBtn.setAttribute("aria-label", "Close time controls");
+            closeBtn.textContent = "↩";
+            top.append(backBtn, fwdBtn, closeBtn);
+            row.appendChild(top);
+            const seekBar = document.createElement("div");
+            seekBar.className = "bd-slot-seek";
+            const range = document.createElement("input");
+            range.type = "range";
+            range.className = "bd-slot-range";
+            const max = Math.max(1, Math.floor(s.duration || 100));
+            range.min = "0";
+            range.max = String(max);
+            range.value = String(Math.min(Math.floor(s.time || 0), max));
+            range.dataset.slotUrl = s.url;
+            range.setAttribute("aria-label", "Video position");
+            const timeLbl = document.createElement("span");
+            timeLbl.className = "bd-slot-time";
+            timeLbl.textContent = s.duration > 0 ? `${fmtTime(s.time)} / ${fmtTime(s.duration)}` : fmtTime(s.time);
+            range.addEventListener("input", () => {
+              s.seeking = true;
+              timeLbl.textContent = s.duration > 0 ? `${fmtTime(+range.value)} / ${fmtTime(s.duration)}` : fmtTime(+range.value);
+            });
+            range.addEventListener("change", () => {
+              s.seeking = false;
+              seekSlotTo(s, +range.value);
+              range.blur();
+            });
+            range.addEventListener("pointerup", () => range.blur());
+            seekBar.append(range, timeLbl);
+            row.appendChild(seekBar);
+          } else {
+            const starBtn = document.createElement("button");
+            starBtn.type = "button";
+            starBtn.className = "bd-slot-btn bd-star" + (isSavedUrl(s.url) ? " bd-saved" : "");
+            starBtn.dataset.act = "open-save";
+            starBtn.dataset.saveUrl = s.url;
+            starBtn.dataset.saveTitle = s.title || "";
+            starBtn.title = "Save to folder";
+            starBtn.textContent = "★";
+            const muteBtn = document.createElement("button");
+            muteBtn.type = "button";
+            const muted = isMuted(s.url);
+            muteBtn.className = "bd-slot-btn bd-slot-ico" + (muted ? " bd-muted" : "");
+            muteBtn.dataset.act = "mute-slot";
+            muteBtn.dataset.slotUrl = s.url;
+            muteBtn.title = muted ? "Unmute stream" : "Mute stream";
+            muteBtn.setAttribute("aria-label", muted ? "Unmute stream" : "Mute stream");
+            muteBtn.innerHTML = svg(muted ? "volOff" : "volOn");
+            const rmBtn = document.createElement("button");
+            rmBtn.type = "button";
+            rmBtn.className = "bd-slot-btn";
+            rmBtn.dataset.act = "remove-slot";
+            rmBtn.dataset.slotUrl = s.url;
+            rmBtn.title = "Remove stream";
+            rmBtn.textContent = "×";
+            top.append(starBtn, muteBtn, rmBtn);
+            row.appendChild(top);
+          }
+          slotsBox.appendChild(row);
+        }
       }
     }
+    updateSeek();
     const activeSet = new Set(slots.map((s) => s.url));
     renderSavePop(force);
     renderFolders(activeSet, force);
@@ -1138,12 +1265,31 @@ window.backdrop = (() => {
     return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
   }
 
+  function canSlotSeek(s) {
+    return !!(s && !s.live && !s.isLiveStream && (s.kind === "youtube" || s.kind === "video"));
+  }
+
   function updateSeek() {
-    const row = panel && panel.querySelector(".bd-seek");
+    if (!panel) return;
+    const slotRows = panel.querySelectorAll(".bd-slot-row");
+    for (const r of slotRows) {
+      const s = slots.find((x) => x.url === r.dataset.slotUrl);
+      if (!s) continue;
+      const chip = r.querySelector(".bd-slot-chip");
+      if (chip) chip.textContent = (s.duration > 0 || s.time > 0) ? fmtTime(s.time) : "⏱";
+      const range = r.querySelector(".bd-slot-range");
+      const timeLbl = r.querySelector(".bd-slot-time");
+      if (range && timeLbl && !s.seeking) {
+        const max = Math.max(1, Math.floor(s.duration || 100));
+        range.max = String(max);
+        if (document.activeElement !== range) range.value = String(Math.min(Math.floor(s.time || 0), max));
+        timeLbl.textContent = s.duration > 0 ? `${fmtTime(s.time)} / ${fmtTime(s.duration)}` : fmtTime(s.time);
+      }
+    }
+    const row = panel.querySelector(".bd-seek");
     if (!row) return;
     const s0 = slots[0];
-    const canSeek = !!(cfg && cfg.on && slots.length === 1 && s0 && !s0.live && !s0.isLiveStream
-      && (s0.kind === "youtube" || s0.kind === "video") && duration > 0);
+    const canSeek = !!(cfg && cfg.on && slots.length === 1 && canSlotSeek(s0) && duration > 0 && !seekOpenSlots.has(s0.url));
     row.hidden = !canSeek;
     if (!canSeek || seeking) return;
     const range = row.querySelector("input");
@@ -1153,15 +1299,21 @@ window.backdrop = (() => {
     row.querySelector(".bd-seek-time").textContent = `${fmtTime(time)} / ${fmtTime(duration)}`;
   }
 
-  function seekTo(sec) {
-    const s0 = slots[0];
-    if (!cfg || !s0 || s0.live) return;
-    sec = Math.max(0, Math.min(sec, duration || sec));
-    time = s0.time = sec;
-    if (s0.kind === "video" && s0.media) s0.media.currentTime = sec;
-    if (s0.kind === "youtube") ytSend(s0, { event: "command", func: "seekTo", args: [sec, true] });
-    send("backdrop:time:" + sec);
+  function seekSlotTo(s, sec) {
+    if (!cfg || !canSlotSeek(s)) return;
+    const dur = s.duration > 0 ? s.duration : 0;
+    sec = Math.max(0, dur ? Math.min(sec, dur) : sec);
+    s.time = sec;
+    if (slots[0] === s) time = sec;
+    if (s.kind === "video" && s.media) s.media.currentTime = sec;
+    if (s.kind === "youtube") ytSend(s, { event: "command", func: "seekTo", args: [sec, true] });
+    if (slots[0] === s) send("backdrop:time:" + sec);
+    send("backdrop:slot_time:" + JSON.stringify({ url: s.url, time: sec }));
     updateSeek();
+  }
+
+  function seekTo(sec) {
+    seekSlotTo(slots[0], sec);
   }
 
   // Python answers "backdrop:clip" with a copied video link, if there is one.

@@ -754,21 +754,67 @@
 
 #bd-panel .bd-slot-row {
   display: flex;
-  align-items: center;
-  gap: 3px;
+  flex-direction: column;
+  gap: 5px;
   padding: 4px 6px;
   border-radius: 7px;
   background: var(--bd-bg);
   border: 1px solid var(--bd-surface-line);
 }
 
+#bd-panel .bd-slot-row.bd-seek-open {
+  border-color: var(--bd-accent);
+  padding: 5px 6px 6px;
+}
+
+#bd-panel .bd-slot-top {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
 #bd-panel .bd-slot-name {
   flex: 1;
   min-width: 0;
   font-size: 12px;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#bd-panel .bd-slot-name.bd-seekable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 1px 4px;
+  margin-left: -4px;
+  border-radius: 5px;
+}
+
+#bd-panel .bd-slot-name.bd-seekable:hover {
+  background: var(--bd-hover);
+}
+
+#bd-panel .bd-slot-title-txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bd-panel .bd-slot-chip {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--bd-dim);
+  background: var(--bd-surface);
+  border: 1px solid var(--bd-surface-line);
 }
 
 #bd-panel .bd-slot-btn {
@@ -778,6 +824,42 @@
   padding: 2px 5px;
   border-radius: 5px;
   font-size: 12px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-skip-btn {
+  padding: 2px 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--bd-fg);
+  background: var(--bd-surface);
+  border: 1px solid var(--bd-surface-line);
+}
+
+#bd-panel .bd-seek-close {
+  color: var(--bd-accent);
+  font-weight: 700;
+}
+
+#bd-panel .bd-slot-seek {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+#bd-panel .bd-slot-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--bd-accent);
+  cursor: pointer;
+}
+
+#bd-panel .bd-slot-time {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--bd-dim);
 }
 

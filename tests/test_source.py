@@ -267,4 +267,10 @@ store.update(on=True, url="https://www.twitch.tv/lofi_channel", urls=["https://w
 assert ns["_browse_start_url"]() == "https://www.twitch.tv/", ns["_browse_start_url"]()
 store.update(on=False)
 assert ns["_browse_start_url"]() == "https://www.twitch.tv/lofi_channel", ns["_browse_start_url"]()
+# Per-slot timestamps persist independently across multi-view videos.
+ns["apply"]({"play_urls": ["https://youtu.be/aaaaaaaaaa1", "https://youtu.be/aaaaaaaaaa2"]})
+ns["on_js_message"]((False, None), 'backdrop:slot_time:{"url":"https://youtu.be/aaaaaaaaaa1","time":120}', None)
+ns["on_js_message"]((False, None), 'backdrop:slot_time:{"url":"https://youtu.be/aaaaaaaaaa2","time":345}', None)
+st_times = ns["state"](True)
+assert "&start=120" in st_times["streams"][0]["src"] and "&start=345" in st_times["streams"][1]["src"], st_times["streams"]
 print("ok")

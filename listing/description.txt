@@ -9,7 +9,7 @@
 - **Saved folders & multi-select.** Organize favorite videos or streams into compact folder pills right in the sidebar (`★` on any playing, recent, or browsed page). Use **Select** to pick up to 4 saved items across folders and launch them together in multi-view.
 - **Quick controls while studying.** A small tab on the right edge opens a compact panel that auto-minimizes when you click back to study and never steals keyboard focus from Space or 1–4:
   - Play / Pause, Hide picture (keep sound), **Break zone**, Turn on / off
-  - **Position** scrub bar for regular videos (automatically hidden for live streams)
+  - **Per-video timestamp & `-10s` / `+10s` skip:** Click any non-live video's title in **Now Playing** (even with 2–4 videos playing at once) to open persistent `-10s` / `+10s` skip buttons and a scrub slider for that video, then click `↩` anytime to return to `★` / Mute / `×`
   - **Backdrop** blur/opacity, **Study card** translucency (+ **True transparency**), and **Volume** sliders
   - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) with live FPS readout
   - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links (with `+` to play alongside), or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
