@@ -6,7 +6,7 @@
 
 - **Frosted-glass card over video.** Your card sits on a centered, translucent frosted-glass plate so text stays easy to read while the video glows softly behind and around it. Works with stock Anki as well as theme and UI add-ons like Onigiri, Synapse, AMBOSS, and AnKing card templates.
 - **Quick controls while studying.** A small tab on the right edge opens a compact panel that never steals keyboard focus from Space or 1–4:
-  - Play / Pause (`Shift+P`), Hide picture (keep sound), Turn on / off
+  - Play / Pause, Hide picture (keep sound), Turn on / off
   - **Position** scrub bar for regular videos (automatically hidden for live streams)
   - **Backdrop** strength slider (from soft blur to clear) and **Volume** slider
   - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`) for live streams

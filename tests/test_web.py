@@ -61,7 +61,13 @@ res = run_html(
       const before = getComputedStyle(qa, "::before");
       const bodyBefore = getComputedStyle(document.body, "::before");
       const bodyBg = getComputedStyle(document.body).backgroundColor;
-      // Check volume sync on !changed start() (Settings dialog slider fix).
+      // Check fixed plate width & steady min-height across short/long cards and AnKing 10s "!" timer lines.
+      const shortWidth = qaRect.width;
+      const shortHeight = qaRect.height;
+      document.querySelector("#qa .timer").innerHTML = "<span style='color:#CC5B5B'>!<br/>!<br/>!<br/>!<br/>!<br/>!</span>";
+      const afterTimerHeight = qa.getBoundingClientRect().height;
+      qa.firstChild.textContent = "A ".repeat(200);
+      const longWidth = qa.getBoundingClientRect().width;
       backdrop.start({on:true, plate:true, lite:false, picture:true, panel:false,
         url:"https://example.com/v.webm", kind:"video", src:"", start:0,
         strength:100, volume:15, paused:true, title:"", recent:[]});
@@ -69,7 +75,10 @@ res = run_html(
       return {
         bodyBg,
         bodyBeforeContent: bodyBefore.content,
-        qaWidth: qaRect.width,
+        qaWidth: shortWidth,
+        shortHeight,
+        afterTimerHeight,
+        longWidth,
         beforeBg: before.backgroundColor,
         beforeFilter: before.backdropFilter || before.webkitBackdropFilter || "",
         popLeft: popRect.left,
@@ -79,7 +88,8 @@ res = run_html(
 )
 assert res["bodyBg"] == "rgba(0, 0, 0, 0)", res
 assert res["bodyBeforeContent"] == "none", res
-assert res["qaWidth"] < 900, res  # centered reading card, not 1240px wall-to-wall
+assert res["qaWidth"] == 760 and res["longWidth"] == 760, res  # consistent fixed card width, not adaptive
+assert res["shortHeight"] >= 300 and res["afterTimerHeight"] == res["shortHeight"], res  # steady height & no 10s jump
 assert "39, 40, 40" in res["beforeBg"] and "0.62" in res["beforeBg"], res
 assert "blur(" in res["beforeFilter"], res
 assert res["popLeft"] == 10, res  # position:fixed inside #qa stays viewport-relative
@@ -118,26 +128,31 @@ assert synapse_over["stock"] is False, synapse_over
 assert synapse_over["wrapBg"] == "rgba(0, 0, 0, 0)", synapse_over
 assert "0.62" in synapse_over["boxBg"], synapse_over
 
-# 3. Software rendering (lite:true) disables glass blur, and holding P triggers peek.
+# 3. Software rendering (lite:true) disables glass blur, plain P triggers peek, Shift+P does not pause/peek.
 lite_res = run_html(
     f"<!doctype html><html><head><style>body {{ background: #fff; }}</style><style>{CSS} * {{ transition: none !important; }}</style><script>{JS}</script></head>"
     "<body><div id='qa'>Light card</div></body></html>",
     """(() => {
+      const cmds = [];
+      window.pycmd = (m) => cmds.push(m);
       backdrop.start({on:true, plate:true, lite:true, picture:true, panel:false,
         url:"https://example.com/v.webm", kind:"video", src:"", start:0,
         strength:100, volume:50, paused:true, title:"", recent:[]});
       const before = getComputedStyle(document.getElementById("qa"), "::before");
       const filter = before.backdropFilter || before.webkitBackdropFilter || "none";
       const bg = before.backgroundColor;
+      document.dispatchEvent(new KeyboardEvent("keydown", {key: "P", shiftKey: true, bubbles: true}));
+      const shiftPeek = document.documentElement.classList.contains("bd-peek");
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "p", bubbles: true}));
       const peeking = document.documentElement.classList.contains("bd-peek");
       const peekOp = getComputedStyle(document.getElementById("qa")).opacity;
       document.dispatchEvent(new KeyboardEvent("keyup", {key: "p", bubbles: true}));
-      return {filter, bg, peeking, peekOp, stillPeeking: document.documentElement.classList.contains("bd-peek")};
+      return {filter, bg, shiftPeek, cmds, peeking, peekOp, stillPeeking: document.documentElement.classList.contains("bd-peek")};
     })()""",
 )
 assert lite_res["filter"] == "none", lite_res
 assert "255, 255, 255" in lite_res["bg"], lite_res
+assert not lite_res["shiftPeek"] and lite_res["cmds"] == [], lite_res
 assert lite_res["peeking"] and not lite_res["stillPeeking"] and abs(float(lite_res["peekOp"]) - 0.12) < 0.02, lite_res
 
 # 4. Sidebar quality pills + seek bar visibility (hidden on live streams, shown for seekable videos).

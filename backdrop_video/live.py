@@ -184,7 +184,7 @@ def convert_cmd(video: str, audio, headers: dict = None, quality: str = "auto") 
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        parts = self.path.strip("/").split("/")
+        parts = self.path.split("?", 1)[0].strip("/").split("/")
         with _lock:
             stream = _streams.get(parts[1][:-5]) if len(parts) == 2 and parts[0] == _token else None
         if not stream or not parts[1].endswith(".webm"):
@@ -208,8 +208,12 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # the page moved on or reloaded
         finally:
-            proc.kill()
-            proc.wait()
+            if proc.poll() is None:
+                proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.SubprocessError:
+                pass
             with _lock:
                 _procs.discard(proc)
 

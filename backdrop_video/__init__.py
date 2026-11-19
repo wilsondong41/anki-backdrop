@@ -222,7 +222,8 @@ def go_live(url: str, quiet: bool = False) -> None:
             else:
                 tooltip("Couldn't start this live stream. It may have ended, or the link may be wrong.", period=6000)
             return
-        if conf()["url"] == url:
+        c = conf()
+        if c["on"] and c["url"] == url:
             if title:
                 set_title(title)
             refresh()
@@ -413,7 +414,7 @@ class BackdropDialog(QDialog):
 
     def play(self) -> None:
         url = self.link.text().strip()
-        if not url:
+        if not url or len(url) > 2000:
             return
         play_url(url)
         self.off.setEnabled(True)

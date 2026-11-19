@@ -42,7 +42,10 @@ window.backdrop = (() => {
       Object.assign(media, { autoplay: !cfg.paused, loop: !cfg.live, playsInline: true });
       if (!(cfg.live && cfg.paused)) media.src = cfg.src;  // a paused live stream isn't fetched (or converted) at all
       media.addEventListener("loadedmetadata", () => {
-        if (!cfg.live) media.currentTime = cfg.start || 0;
+        if (!cfg.live) {
+          time = cfg.start || 0;
+          media.currentTime = time;
+        }
         if (!cfg.live && Number.isFinite(media.duration) && media.duration > 0) { duration = media.duration; updateSeek(); }
         setVolume(cfg.volume);
       });
@@ -183,7 +186,7 @@ window.backdrop = (() => {
   });
 
   function report() {
-    if (cfg.live) return;
+    if (cfg.live || cfg.paused) return;
     if (cfg.kind === "video" && media) time = media.currentTime;
     if (time) send("backdrop:time:" + time);
   }
@@ -232,7 +235,7 @@ window.backdrop = (() => {
         <button class="bd-offer" data-act="offer" hidden></button>
         <form class="bd-link"><input type="text" placeholder="Paste a link" aria-label="Video link" spellcheck="false"><button type="submit">Play</button></form>
         <div class="bd-recent"></div>
-        <div class="bd-hint">Hold P to peek · Shift+P pauses</div>
+        <div class="bd-hint">Hold P to peek</div>
       </div>`;
     root.appendChild(panel);
 
@@ -385,16 +388,16 @@ window.backdrop = (() => {
     b.textContent = "Play copied link: " + shortLink(link || "");
   }
 
-  // Hold P to see the video clearly, Shift+P pauses; both ignored while typing.
+  // Hold P to see the video clearly; ignored while typing or when modifiers are held.
   const isEditable = (el) => el && el.closest && el.closest("input, textarea, select, [contenteditable]");
   const typing = (e) => isEditable(e.target) || isEditable(document.activeElement);
   document.addEventListener("keydown", (e) => {
-    if (!cfg || !cfg.on || (e.key !== "p" && e.key !== "P") || e.ctrlKey || e.metaKey || e.altKey || typing(e)) return;
-    if (e.shiftKey) { if (!e.repeat) setPaused(!cfg.paused); }
-    else if (cfg.picture !== false) root.classList.add("bd-peek");
+    if (!cfg || !cfg.on || (e.key !== "p" && e.key !== "P") || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || typing(e)) return;
+    if (cfg.picture !== false) root.classList.add("bd-peek");
   });
   document.addEventListener("keyup", (e) => { if (e.key === "p" || e.key === "P") root.classList.remove("bd-peek"); });
   window.addEventListener("blur", () => root.classList.remove("bd-peek"));
+  window.addEventListener("focus", () => { if (cfg && cfg.panel) send("backdrop:clip"); });
 
   // Re-read the plate colour on card swaps or theme changes (not on every inner cloze/timer DOM mutation).
   let watching = false, platePending = false;
