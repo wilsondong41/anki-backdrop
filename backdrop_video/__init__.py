@@ -191,6 +191,52 @@ def delete_folder(name: str) -> bool:
     return True
 
 
+def rename_folder(old_name: str, new_name: str) -> bool:
+    old_name = (old_name or "").strip() if isinstance(old_name, str) else ""
+    new_name = (new_name or "").strip()[:40] if isinstance(new_name, str) else ""
+    if not old_name or not new_name:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    target = next((f for f in folders if f["name"].lower() == old_name.lower()), None)
+    if target is None:
+        return False
+    if any(f is not target and f["name"].lower() == new_name.lower() for f in folders):
+        return False
+    target["name"] = new_name
+    save(folders=folders)
+    return True
+
+
+def move_folder_item(src_folder: str, dst_folder: str, url: str) -> bool:
+    src_folder = (src_folder or "").strip() if isinstance(src_folder, str) else ""
+    dst_folder = (dst_folder or "").strip()[:40] if isinstance(dst_folder, str) else ""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    if not src_folder or not dst_folder or not url or src_folder.lower() == dst_folder.lower():
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    src = next((f for f in folders if f["name"].lower() == src_folder.lower()), None)
+    if src is None:
+        return False
+    item = next((it for it in src["items"] if it["url"] == url), None)
+    if item is None:
+        return False
+    dst = next((f for f in folders if f["name"].lower() == dst_folder.lower()), None)
+    if dst is None:
+        if len(folders) >= MAX_FOLDERS:
+            return False
+        dst = {"name": dst_folder, "items": []}
+        folders.append(dst)
+    if not any(it["url"] == url for it in dst["items"]):
+        if len(dst["items"]) >= MAX_FOLDER_ITEMS:
+            return False
+        dst["items"].insert(0, item)
+    src["items"] = [it for it in src["items"] if it["url"] != url]
+    save(folders=folders)
+    return True
+
+
 def save_to_folder(folder_name: str, url: str, title: str = "") -> bool:
     folder_name = (folder_name or "").strip()[:40] if isinstance(folder_name, str) else ""
     url = (url or "").strip() if isinstance(url, str) else ""
@@ -816,6 +862,11 @@ def refresh(ask_live: bool = False, only_url: str = None) -> None:
             _browse._sync_buttons()
         except Exception:
             pass
+    if _dialog is not None and hasattr(_dialog, "sync_from_config"):
+        try:
+            _dialog.sync_from_config()
+        except Exception:
+            pass
     if mw.state in ("review", "overview"):
         allow_autoplay()
         s = state(mw.state == "review")
@@ -868,13 +919,82 @@ def clipboard_link() -> str:
 class BackdropDialog(QDialog):
     def __init__(self):
         super().__init__(mw)
+        from aqt.qt import QAbstractItemView, QGroupBox, QListWidget
         self.setWindowTitle("Backdrop Video")
+        self.resize(780, 440)
+        self._syncing = False
         c = conf()
-        pasted = clipboard_link()
-        self.link = QLineEdit(pasted if pasted and pasted != c["url"] else c["url"])
-        self.link.setPlaceholderText("Paste a YouTube or video link")
-        self.link.setMinimumWidth(380)
-        self.link.returnPressed.connect(self.play)
+
+        # ---- Left: Browse & Saved Folder Organizer ----
+        lib_box = QGroupBox("Saved Folders & Browse")
+        lib_lay = QVBoxLayout(lib_box)
+
+        self.browse_btn = QPushButton("Browse / Pre-find Videos…")
+        self.browse_btn.setAutoDefault(False)
+        self.browse_btn.setToolTip("Open the tabbed mini-browser to find, add, or save videos into folders")
+        self.browse_btn.setStyleSheet(
+            "QPushButton { background: #3b82f6; color: #ffffff; font-weight: 600; padding: 6px 12px; border-radius: 6px; }"
+        )
+        self.browse_btn.clicked.connect(open_browse)
+        lib_lay.addWidget(self.browse_btn)
+
+        folder_bar = QHBoxLayout()
+        self.folder_combo = QComboBox()
+        self.folder_combo.currentIndexChanged.connect(self._render_folder_items)
+        self.new_folder_btn = QPushButton("+ New")
+        self.rename_folder_btn = QPushButton("Rename")
+        self.del_folder_btn = QPushButton("Delete")
+        for b in (self.new_folder_btn, self.rename_folder_btn, self.del_folder_btn):
+            b.setAutoDefault(False)
+        self.new_folder_btn.clicked.connect(self._create_folder_prompt)
+        self.rename_folder_btn.clicked.connect(self._rename_folder_prompt)
+        self.del_folder_btn.clicked.connect(self._delete_current_folder)
+        folder_bar.addWidget(self.folder_combo, 1)
+        folder_bar.addWidget(self.new_folder_btn)
+        folder_bar.addWidget(self.rename_folder_btn)
+        folder_bar.addWidget(self.del_folder_btn)
+        lib_lay.addLayout(folder_bar)
+
+        self.folder_list = QListWidget()
+        self.folder_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.folder_list.itemSelectionChanged.connect(self._sync_folder_buttons)
+        self.folder_list.itemDoubleClicked.connect(lambda _it: self.play_selected())
+        lib_lay.addWidget(self.folder_list, 1)
+
+        paste_bar = QHBoxLayout()
+        self.save_link = QLineEdit()
+        self.save_link.setPlaceholderText("Paste a link to save into this folder…")
+        self.save_link.returnPressed.connect(self._save_pasted_link)
+        self.save_link_btn = QPushButton("Save")
+        self.save_link_btn.setAutoDefault(False)
+        self.save_link_btn.clicked.connect(self._save_pasted_link)
+        paste_bar.addWidget(self.save_link, 1)
+        paste_bar.addWidget(self.save_link_btn)
+        lib_lay.addLayout(paste_bar)
+
+        item_bar = QHBoxLayout()
+        self.play_sel_btn = QPushButton("Play Selected")
+        self.add_sel_btn = QPushButton("+ Add")
+        self.move_btn = QPushButton("Move to…")
+        self.rem_btn = QPushButton("Remove")
+        for b in (self.play_sel_btn, self.add_sel_btn, self.move_btn, self.rem_btn):
+            b.setAutoDefault(False)
+        self.play_sel_btn.setToolTip("Play up to 4 selected saved videos together in multi-view")
+        self.add_sel_btn.setToolTip("Add selected saved video(s) alongside what is currently playing")
+        self.play_sel_btn.clicked.connect(self.play_selected)
+        self.add_sel_btn.clicked.connect(self.add_selected)
+        self.move_btn.clicked.connect(self._move_selected_menu)
+        self.rem_btn.clicked.connect(self.remove_selected)
+        item_bar.addWidget(self.play_sel_btn)
+        item_bar.addWidget(self.add_sel_btn)
+        item_bar.addStretch()
+        item_bar.addWidget(self.move_btn)
+        item_bar.addWidget(self.rem_btn)
+        lib_lay.addLayout(item_bar)
+
+        # ---- Right: Display, Quality & Live Stream Helper ----
+        set_box = QGroupBox("Display & Live Streams")
+        set_lay = QVBoxLayout(set_box)
 
         self.strength = self.slider(c["strength"], lambda v: self.live(strength=v))
         self.strength.setAccessibleName("Backdrop strength")
@@ -894,57 +1014,42 @@ class BackdropDialog(QDialog):
         self.quality.currentIndexChanged.connect(self.set_quality)
 
         has_helper = os.path.exists(live.helper_path(ADDON_DIR))
-        self.helper_btn = QPushButton("yt-dlp Installed (Update)" if has_helper else "Download yt-dlp Helper (~3 MB)")
+        self.helper_btn = QPushButton("yt-dlp Installed ✓ (Update)" if has_helper else "Download yt-dlp Helper (~3 MB)")
         self.helper_btn.setAutoDefault(False)
-        self.helper_btn.setToolTip("Free helper needed for Twitch, Kick, and many live webcams")
+        self.helper_btn.setToolTip("Free helper needed for Twitch, Kick, YouTube Live, and many webcams")
         self.helper_btn.clicked.connect(self.download_helper)
-
-        browse_btn = QPushButton("Browse…")
-        browse_btn.setAutoDefault(False)
-        browse_btn.setToolTip("Search or browse in Anki to pick a video or stream")
-        browse_btn.clicked.connect(open_browse)
-        play = QPushButton("Play")
-        play.setAutoDefault(False)
-        play.setDefault(False)
-        play.clicked.connect(self.play)
-        self.add_btn = QPushButton("Add (+)")
-        self.add_btn.setAutoDefault(False)
-        self.add_btn.setToolTip("Add alongside currently playing videos (up to 4)")
-        self.add_btn.clicked.connect(self.add_stream)
-        self.off = QPushButton("Turn Off")
-        self.off.setAutoDefault(False)
-        self.off.clicked.connect(self.turn_off)
-        self.off.setEnabled(c["on"])
-        buttons = QHBoxLayout()
-        buttons.addWidget(browse_btn)
-        buttons.addStretch()
-        buttons.addWidget(self.off)
-        buttons.addWidget(self.add_btn)
-        buttons.addWidget(play)
+        helper_note = QLabel("Needed for Twitch, Kick, YouTube Live, and webcams. Regular YouTube videos work without it.")
+        helper_note.setWordWrap(True)
+        helper_note.setStyleSheet("color: gray; font-size: 11px;")
 
         form = QFormLayout()
-        form.addRow("Video link", self.link)
         form.addRow("Backdrop", self.labelled(self.strength, "Faint", "Clear"))
         form.addRow("Study card", self.labelled(self.plate_opacity, "Clear", "Solid"))
         form.addRow("", self.true_transparency)
         form.addRow("Volume", self.volume)
         form.addRow("Stream quality", self.quality)
-        form.addRow("Stream helper", self.helper_btn)
-        urls = active_urls(c)
-        note = live.effective_note(
-            c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
-            fps_list=live.active_fps(urls) if c["on"] else None,
-        )
-        hint = QLabel(
-            f"Plays behind your cards and on the study screen ({note}). "
-            "Edge tab has quick controls. Hold P to peek."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray")
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(hint)
-        layout.addLayout(buttons)
+        form.addRow("Live helper", self.helper_btn)
+        form.addRow("", helper_note)
+        set_lay.addLayout(form)
+
+        self.status_hint = QLabel()
+        self.status_hint.setWordWrap(True)
+        self.status_hint.setStyleSheet("color: gray")
+        set_lay.addWidget(self.status_hint)
+        set_lay.addStretch()
+
+        self.off = QPushButton("Turn Off Backdrop")
+        self.off.setAutoDefault(False)
+        self.off.clicked.connect(self.turn_off)
+        off_row = QHBoxLayout()
+        off_row.addStretch()
+        off_row.addWidget(self.off)
+        set_lay.addLayout(off_row)
+
+        cols = QHBoxLayout(self)
+        cols.addWidget(lib_box, 11)
+        cols.addWidget(set_box, 10)
+        self.sync_from_config()
 
     def slider(self, value: int, on_change) -> QSlider:
         s = QSlider(Qt.Orientation.Horizontal)
@@ -961,11 +1066,200 @@ class BackdropDialog(QDialog):
         return row
 
     def live(self, **change) -> None:
+        if self._syncing:
+            return
         save(**change)
         refresh()
 
     def set_quality(self) -> None:
+        if self._syncing:
+            return
         set_quality(self.quality.currentData())
+
+    def _current_folder_name(self) -> str:
+        return self.folder_combo.currentData() or ""
+
+    def _selected_urls(self) -> list:
+        out = []
+        for it in self.folder_list.selectedItems():
+            u = it.data(Qt.ItemDataRole.UserRole)
+            if u:
+                out.append(u)
+        return out
+
+    def sync_from_config(self, select_folder: str = None) -> None:
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            c = conf()
+            for widget, val in (
+                (self.strength, c["strength"]),
+                (self.plate_opacity, c["plate_opacity"]),
+                (self.volume, c["volume"]),
+            ):
+                if widget.value() != val:
+                    widget.blockSignals(True)
+                    widget.setValue(val)
+                    widget.blockSignals(False)
+            if self.true_transparency.isChecked() != bool(c.get("true_transparency")):
+                self.true_transparency.blockSignals(True)
+                self.true_transparency.setChecked(bool(c.get("true_transparency")))
+                self.true_transparency.blockSignals(False)
+            q_idx = self.quality.findData(c["quality"])
+            if q_idx >= 0 and self.quality.currentIndex() != q_idx:
+                self.quality.blockSignals(True)
+                self.quality.setCurrentIndex(q_idx)
+                self.quality.blockSignals(False)
+            self.off.setEnabled(bool(c["on"]))
+            urls = active_urls(c)
+            note = live.effective_note(
+                c["quality"], max(1, len(urls)), multi_fps=c.get("multi_fps", "auto"),
+                fps_list=live.active_fps(urls) if c["on"] else None,
+            )
+            self.status_hint.setText(
+                f"Active settings: {note}. Use the right-edge tab while studying for quick controls. Hold P to peek."
+            )
+            folders = _sanitize_folders(c.get("folders"))
+            prev = select_folder if select_folder is not None else self._current_folder_name()
+            self.folder_combo.blockSignals(True)
+            self.folder_combo.clear()
+            for f in folders:
+                self.folder_combo.addItem(f"{f['name']} ({len(f['items'])})", f["name"])
+            idx = self.folder_combo.findData(prev)
+            if idx >= 0:
+                self.folder_combo.setCurrentIndex(idx)
+            self.folder_combo.blockSignals(False)
+            self._render_folder_items()
+        finally:
+            self._syncing = False
+
+    def _render_folder_items(self) -> None:
+        from aqt.qt import QListWidgetItem
+        self.folder_list.clear()
+        fname = self._current_folder_name()
+        folders = _sanitize_folders(conf().get("folders"))
+        folder = next((f for f in folders if f["name"] == fname), None)
+        if folder is None:
+            placeholder = QListWidgetItem("No folders yet — click + New or ★ in the sidebar / Browse")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.folder_list.addItem(placeholder)
+        elif not folder["items"]:
+            placeholder = QListWidgetItem("This folder is empty — paste a link below or use Browse…")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.folder_list.addItem(placeholder)
+        else:
+            for it in folder["items"]:
+                label = it["title"] or re.sub(r"^https?://(www\.)?", "", it["url"])
+                row = QListWidgetItem(label)
+                row.setData(Qt.ItemDataRole.UserRole, it["url"])
+                row.setToolTip(f"{it['title']}\n{it['url']}" if it["title"] else it["url"])
+                self.folder_list.addItem(row)
+        self._sync_folder_buttons()
+
+    def _sync_folder_buttons(self) -> None:
+        has_folder = bool(self._current_folder_name())
+        sel = self._selected_urls()
+        folders = _sanitize_folders(conf().get("folders"))
+        self.rename_folder_btn.setEnabled(has_folder)
+        self.del_folder_btn.setEnabled(has_folder)
+        self.save_link.setEnabled(True)
+        self.play_sel_btn.setEnabled(bool(sel))
+        self.play_sel_btn.setText(f"Play Selected ({min(len(sel), MAX_STREAMS)})" if len(sel) > 1 else "Play Selected")
+        self.add_sel_btn.setEnabled(bool(sel))
+        self.move_btn.setEnabled(bool(sel) and len(folders) >= 2)
+        self.rem_btn.setEnabled(bool(sel))
+
+    def _create_folder_prompt(self) -> None:
+        from aqt.qt import QInputDialog
+        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+        if ok and name.strip():
+            if create_folder(name.strip()):
+                self.sync_from_config(select_folder=name.strip()[:40])
+                refresh()
+
+    def _rename_folder_prompt(self) -> None:
+        from aqt.qt import QInputDialog
+        old = self._current_folder_name()
+        if not old:
+            return
+        name, ok = QInputDialog.getText(self, "Rename Folder", "New folder name:", text=old)
+        if ok and name.strip() and rename_folder(old, name.strip()):
+            self.sync_from_config(select_folder=name.strip()[:40])
+            refresh()
+
+    def _delete_current_folder(self) -> None:
+        fname = self._current_folder_name()
+        if not fname:
+            return
+        folders = _sanitize_folders(conf().get("folders"))
+        target = next((f for f in folders if f["name"] == fname), None)
+        if target and target["items"] and not askUser(f"Delete folder \"{fname}\" and its {len(target['items'])} saved link(s)?", title="Backdrop Video"):
+            return
+        if delete_folder(fname):
+            self.sync_from_config()
+            refresh()
+
+    def _save_pasted_link(self) -> None:
+        url = self.save_link.text().strip()
+        if not url or len(url) > 2000:
+            return
+        fname = self._current_folder_name() or "Saved"
+        if save_to_folder(fname, url):
+            self.save_link.clear()
+            self.sync_from_config(select_folder=fname)
+            refresh()
+
+    def play_selected(self) -> None:
+        urls = self._selected_urls()[:MAX_STREAMS]
+        if not urls:
+            return
+        if play_urls(urls):
+            self.off.setEnabled(True)
+            refresh(ask_live=True)
+
+    def add_selected(self) -> None:
+        urls = self._selected_urls()
+        if not urls:
+            return
+        added = []
+        for u in urls:
+            if add_url(u):
+                added.append(u)
+        if added:
+            self.off.setEnabled(True)
+            refresh(ask_live=True, only_url=added[0] if len(added) == 1 else None)
+            tooltip(f"Added {len(added)} stream(s) ({len(active_urls())}/{MAX_STREAMS})", period=3000)
+        else:
+            tooltip(f"Already playing {MAX_STREAMS} videos (or selected link is already active).", period=4000)
+
+    def _move_selected_menu(self) -> None:
+        from aqt.qt import QMenu
+        src = self._current_folder_name()
+        urls = self._selected_urls()
+        if not src or not urls:
+            return
+        menu = QMenu(self.move_btn)
+        for f in _sanitize_folders(conf().get("folders")):
+            if f["name"].lower() != src.lower():
+                act = menu.addAction(f["name"])
+                act.triggered.connect(lambda _c=False, dst=f["name"]: self._move_urls(src, dst, urls))
+        menu.exec(self.move_btn.mapToGlobal(self.move_btn.rect().bottomLeft()))
+
+    def _move_urls(self, src: str, dst: str, urls: list) -> None:
+        moved = any(move_folder_item(src, dst, u) for u in urls)
+        if moved:
+            self.sync_from_config(select_folder=src)
+            refresh()
+
+    def remove_selected(self) -> None:
+        fname = self._current_folder_name()
+        urls = self._selected_urls()
+        if not fname or not urls:
+            return
+        if any(remove_from_folder(fname, u) for u in urls):
+            self.sync_from_config(select_folder=fname)
+            refresh()
 
     def download_helper(self) -> None:
         self.helper_btn.setEnabled(False)
@@ -982,31 +1276,14 @@ class BackdropDialog(QDialog):
                 return
             _not_live.clear()
             _declined_urls.clear()
+            save(suppress_ytdlp_prompt=False)
             if _dialog is self:
                 self.helper_btn.setEnabled(True)
                 self.helper_btn.setText("yt-dlp Installed ✓ (Update)")
             tooltip("yt-dlp downloaded! Ready for live streams.", period=4000)
-            refresh()
+            refresh(ask_live=True)
 
         mw.taskman.run_in_background(lambda: live.download_helper(ADDON_DIR), done)
-
-    def play(self) -> None:
-        url = self.link.text().strip()
-        if not url or len(url) > 2000:
-            return
-        play_url(url)
-        self.off.setEnabled(True)
-        refresh(ask_live=True)
-
-    def add_stream(self) -> None:
-        url = self.link.text().strip()
-        if not url or len(url) > 2000:
-            return
-        if not add_url(url):
-            tooltip(f"Already playing {MAX_STREAMS} videos (or this link is already active).", period=4000)
-            return
-        self.off.setEnabled(True)
-        refresh(ask_live=True, only_url=url)
 
     def turn_off(self) -> None:
         save(on=False)

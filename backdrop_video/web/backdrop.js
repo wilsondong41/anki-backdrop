@@ -19,7 +19,9 @@ window.backdrop = (() => {
 
   function start(next) {
     const wasOn = !!(cfg && cfg.on);
+    const prevFolders = cfg && Array.isArray(cfg.folders) ? cfg.folders : [];
     cfg = next;
+    if (!Array.isArray(cfg.folders)) cfg.folders = prevFolders;
     root.classList.toggle("bd-plate", !!cfg.plate);
     root.classList.toggle("bd-lite", !!cfg.lite);
     root.classList.toggle("bd-nopic", cfg.picture === false);
@@ -1025,6 +1027,17 @@ window.backdrop = (() => {
       b.dataset.url = r.url;
       b.textContent = r.title || shortLink(r.url);  // text, never HTML: titles come from the web
       b.title = r.title || r.url;
+      row.appendChild(b);
+      if (cfg.on && slots.length < 4 && !activeSet.has(r.url)) {
+        const addB = document.createElement("button");
+        addB.type = "button";
+        addB.className = "bd-recent-del";
+        addB.dataset.act = "add-saved";
+        addB.dataset.saveUrl = r.url;
+        addB.title = "Play alongside current video";
+        addB.textContent = "+";
+        row.appendChild(addB);
+      }
       const star = document.createElement("button");
       star.type = "button";
       star.className = "bd-recent-del bd-star" + (isSavedUrl(r.url) ? " bd-saved" : "");
@@ -1040,7 +1053,7 @@ window.backdrop = (() => {
       del.dataset.recentUrl = r.url;
       del.title = "Remove from recent";
       del.textContent = "×";
-      row.append(b, star, del);
+      row.append(star, del);
       recent.appendChild(row);
     }
   }

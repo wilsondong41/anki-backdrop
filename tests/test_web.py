@@ -424,7 +424,22 @@ folder_res = run_html(
       const confirmTxt = document.querySelector("#bd-panel [data-act='delete-folder']").textContent;
       document.querySelector("#bd-panel [data-act='delete-folder']").click();
       const pillsAfterDel = Array.from(document.querySelectorAll("#bd-panel .bd-folder-pill")).map((p) => p.textContent);
-      return {cmds, starSaved, pillTexts, fifthDisabled, playSelLabel, confirmTxt, pillsAfterDel};
+      // Recent row has a + button to play alongside when another stream is playing.
+      backdrop.start({on:true, plate:true, lite:false, picture:true, panel:true,
+        url:"https://e.test/1", urls:["https://e.test/1"], muted:[], streams:[s("https://e.test/1", "Vid 1")],
+        strength:50, plate_opacity:70, true_transparency:false, volume:50, quality:"auto", paused:true, title:"Vid 1",
+        recent:[{url:"https://e.test/1", title:"Vid 1"}, {url:"https://e.test/rec2", title:"Recent 2"}],
+        folders:[{name:"Lofi", items:[{url:"https://e.test/1", title:"Vid 1"}]}]});
+      const recAddBtn = document.querySelector("#bd-panel .bd-recent [data-act='add-saved']");
+      const hasRecAdd = !!recAddBtn;
+      if (recAddBtn) recAddBtn.click();
+      // Closing the last playing stream (on:false) preserves Saved folders intact.
+      backdrop.start({on:false, plate:true, lite:false, picture:true, panel:true,
+        url:"", urls:[], muted:[], streams:[], strength:50, plate_opacity:70, true_transparency:false,
+        volume:50, quality:"auto", paused:false, title:"", recent:[{url:"https://e.test/1", title:"Vid 1"}],
+        folders:[{name:"Lofi", items:[{url:"https://e.test/1", title:"Vid 1"}]}]});
+      const pillsAfterClose = Array.from(document.querySelectorAll("#bd-panel .bd-folder-pill")).map((p) => p.textContent);
+      return {cmds, starSaved, pillTexts, fifthDisabled, playSelLabel, confirmTxt, pillsAfterDel, hasRecAdd, pillsAfterClose};
     })()""",
 )
 assert folder_res["starSaved"] is True, folder_res
@@ -433,5 +448,97 @@ assert folder_res["fifthDisabled"] is True and folder_res["playSelLabel"] == "Pl
 assert any(c == 'backdrop:set:{"play_urls":["https://e.test/1","https://e.test/2","https://e.test/3","https://e.test/4"]}' for c in folder_res["cmds"]), folder_res
 assert "Confirm delete" in folder_res["confirmTxt"] and folder_res["pillsAfterDel"] == ["Lofi (1)"], folder_res
 assert any(c == 'backdrop:set:{"delete_folder":"Study"}' for c in folder_res["cmds"]), folder_res
+assert folder_res["hasRecAdd"] is True and any(c == 'backdrop:set:{"add_url":"https://e.test/rec2"}' for c in folder_res["cmds"]), folder_res
+assert folder_res["pillsAfterClose"] == ["Lofi (1)"], folder_res
+
+# 9. Full-stack Python <-> Chromium round-trip audit (real backdrop_video.on_js_message -> refresh -> backdrop.start).
+import types as _types
+import aqt as _aqt
+from PyQt6.QtWidgets import QMainWindow as _QMainWindow, QMenu as _QMenu
+
+_cfg = {}
+_win = _QMainWindow()
+_mw = _win
+class _AM:
+    addonFromModule = staticmethod(lambda n: "backdrop_video")
+    setWebExports = staticmethod(lambda *a: None)
+    getConfig = staticmethod(lambda n: dict(_cfg))
+    writeConfig = staticmethod(lambda n, c: (_cfg.clear(), _cfg.update(c)))
+    setConfigAction = staticmethod(lambda *a: None)
+_mw.addonManager, _mw.app, _mw.state = _AM, app, "review"
+_mw.form = _types.SimpleNamespace(menuTools=_QMenu())
+_eval_queue = []
+_mw.web = _types.SimpleNamespace(eval=lambda js: _eval_queue.append(js), setPlaybackRequiresGesture=lambda v: None)
+_aqt.mw = _mw
+sys.path.insert(0, ROOT)
+import backdrop_video as _bv
+_bv.mw = _mw
+_bv.tooltip = lambda *a, **k: None
+_bv.try_live = lambda *a, **k: None
+_bv.go_live = lambda *a, **k: None
+
+def _rt_exec(js: str):
+    out = []
+    loop = QEventLoop()
+    page.runJavaScript(js, lambda v: (out.append(v), loop.quit()))
+    loop.exec()
+    return out[0] if out else None
+
+def _rt_flush():
+    cmds = _rt_exec("(() => { const c = window._rtCmds.splice(0); return c; })()") or []
+    for m in cmds:
+        _bv.on_js_message((False, None), m, None)
+    while _eval_queue:
+        js = _eval_queue.pop(0)
+        _rt_exec(js)
+
+run_html(
+    f"<!doctype html><html class='night-mode'><head><style>{CSS} * {{ transition: none !important; }}</style><script>{JS}</script></head>"
+    "<body class='nightMode'><div id='qa'>Card</div></body></html>",
+    "(() => { window._rtCmds = []; window.pycmd = (m) => window._rtCmds.push(m); return true; })()",
+)
+_rt_exec(_bv.start_js(_bv.state(True)))
+
+# Step A: Open panel, create empty folder "Favorites", play a video, save it into "Watch Later", then close video with X.
+_rt_exec("document.querySelector('#bd-panel .bd-tab').click();")
+_rt_flush()
+_rt_exec("document.querySelector('#bd-panel [data-act=toggle-new-folder]').click();")
+_rt_exec("(() => { const f = document.querySelector('#bd-panel .bd-new-folder-form'); f.querySelector('input').value = 'Favorites'; f.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); })()")
+_rt_flush()
+_rt_exec("(() => { const f = document.querySelector('#bd-panel .bd-link'); f.querySelector('input').value = 'https://e.test/v1.webm'; f.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); })()")
+_rt_flush()
+_rt_exec("document.querySelector('#bd-panel .bd-slot-row [data-act=open-save]').click();")
+_rt_exec("(() => { const f = document.querySelector('#bd-panel .bd-save-form'); f.querySelector('input').value = 'Watch Later'; f.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); })()")
+_rt_flush()
+# Now click X on the currently playing video (the exact user-reported scenario!).
+_rt_exec("document.querySelector('#bd-panel [data-act=remove-slot]').click();")
+_rt_flush()
+rt_after_close = _rt_exec("Array.from(document.querySelectorAll('#bd-panel .bd-folder-pill')).map(p => p.textContent)")
+assert rt_after_close == ["Favorites (0)", "Watch Later (1)"], (rt_after_close, _cfg.get("folders"))
+assert [f["name"] for f in _cfg["folders"]] == ["Favorites", "Watch Later"], _cfg["folders"]
+
+# Step B: Play a 2nd video, then click + on Recent v1 to play alongside -> 2 slots playing, folders intact.
+_rt_exec("(() => { const f = document.querySelector('#bd-panel .bd-link'); f.querySelector('input').value = 'https://e.test/v2.webm'; f.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); })()")
+_rt_flush()
+_rt_exec("document.querySelector('#bd-panel .bd-recent [data-act=add-saved]').click();")
+_rt_flush()
+assert len(_cfg["urls"]) == 2 and _rt_exec("document.querySelectorAll('#bd-layer .bd-slot').length") == 2, _cfg
+assert [f["name"] for f in _cfg["folders"]] == ["Favorites", "Watch Later"], _cfg["folders"]
+
+# Step C: Close both playing videos one by one -> folders STILL intact, then delete Recent item with X -> gone from config & DOM.
+_rt_exec("document.querySelector('#bd-panel [data-act=remove-slot]').click();")
+_rt_flush()
+_rt_exec("document.querySelector('#bd-panel [data-act=remove-slot]').click();")
+_rt_flush()
+assert _cfg["on"] is False and [f["name"] for f in _cfg["folders"]] == ["Favorites", "Watch Later"], _cfg
+_rt_exec("document.querySelector('#bd-panel [data-act=forget-recent]').click();")
+_rt_flush()
+assert len(_cfg["recent"]) == 1 and _rt_exec("document.querySelectorAll('#bd-panel .bd-recent .bd-recent-row').length") == 1, _cfg
+
+# Step D: Toggle True transparency ON and slide Study card to 0 -> persisted in Python & blur/shadow gone.
+_rt_exec("document.querySelector('#bd-panel input[data-key=true_transparency]').click();")
+_rt_exec("(() => { const r = document.querySelector('#bd-panel input[data-key=plate_opacity]'); r.value='0'; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true})); })()")
+_rt_flush()
+assert _cfg["true_transparency"] is True and _cfg["plate_opacity"] == 0, _cfg
 
 print("web ok")

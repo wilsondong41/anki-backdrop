@@ -12,7 +12,7 @@
   - **Position** scrub bar for regular videos (automatically hidden for live streams)
   - **Backdrop** blur/opacity, **Study card** translucency (+ **True transparency**), and **Volume** sliders
   - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) with live FPS readout
-  - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links, or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
+  - Paste any link, one-click play your copied link, manage **Saved** folders and **Recent** links (with `+` to play alongside), or open the built-in tabbed **Search / Browse** pop-up (`🔍`) with multiple tabs, `★ Save…`, and safe `+ Add` defaults when a stream is already playing
 - **Break zone.** Take a breather cleanly without inflating your Anki card timing or breaking Pomodoro timers (compatible with Pomodoro Bar and other Pomodoro add-ons) while watching your video/stream clearly with a live break/rest countdown.
 - **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card.
 - **Auto-ducks for audio.** Automatically turns the backdrop down to 1/4 volume while Anki card audio, `{{tts}}`, or the Read Aloud add-on is speaking, then brings it back up.
@@ -23,9 +23,8 @@
 
 ## Getting started
 
-1. Open **Tools → Backdrop Video…** (or press **Ctrl+Shift+B** / **Cmd+Shift+B**).
-2. Paste a YouTube, Twitch, or video link and click **Play**.
-3. Use the small film-strip tab on the right edge while studying to adjust blur, volume, position, or switch recent videos.
+1. Open **Tools → Backdrop Video…** (or press **Ctrl+Shift+B** / **Cmd+Shift+B**) to browse/pre-find videos, organize your **Saved Folders**, adjust display settings, or install/update the optional `yt-dlp` live-stream helper.
+2. Or click the small film-strip tab on the right edge while studying to paste a link, browse, save into folders, adjust blur/transparency/volume, or add streams alongside what's playing.
 
 <img src="https://raw.githubusercontent.com/wilsondong41/anki-backdrop/aa574aed03e338007b24900dc2ce0817f868b0a4/listing/3-settings-dialog.png" width="520" alt="Tools → Backdrop Video… dialog with Study card slider, Browse…, and Add (+)">
 

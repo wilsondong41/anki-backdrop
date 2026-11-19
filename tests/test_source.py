@@ -252,6 +252,15 @@ ns["apply"]({"unsave_item": {"folder": "Lofi", "url": "https://example.com/a.web
 assert ns["state"](True)["folders"][0]["items"] == []
 ns["apply"]({"delete_folder": "Lofi"})
 assert [f["name"] for f in ns["state"](True)["folders"]] == ["Chill"]
+# Regression: playing a video and closing it with X (remove_url) or turning off NEVER deletes saved folders.
+ns["apply"]({"url": "https://example.com/play-then-close.webm"})
+ns["apply"]({"remove_url": "https://example.com/play-then-close.webm"})
+assert [f["name"] for f in ns["state"](True)["folders"]] == ["Chill"] and len(ns["state"](True)["folders"][0]["items"]) == 1
+assert ns["rename_folder"]("Chill", "Study Beats") is True
+assert ns["create_folder"]("Focus") is True
+assert ns["move_folder_item"]("Study Beats", "Focus", "https://example.com/b.webm") is True
+f_after = ns["state"](True)["folders"]
+assert [f["name"] for f in f_after] == ["Study Beats", "Focus"] and f_after[0]["items"] == [] and len(f_after[1]["items"]) == 1, f_after
 # Browse start URL avoids reopening an already-playing video and falls back to that site's home page.
 ns["_last_browse_url"] = "https://www.twitch.tv/lofi_channel"
 store.update(on=True, url="https://www.twitch.tv/lofi_channel", urls=["https://www.twitch.tv/lofi_channel"])

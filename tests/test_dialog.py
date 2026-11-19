@@ -28,9 +28,16 @@ b.mw = mw
 b.tooltip = lambda *a, **k: None
 b.open_dialog()
 d = b._dialog
-assert d.link.text() == "https://youtu.be/M7lc1UVf-VE", d.link.text()
-d.play(); d.strength.setValue(80); d.plate_opacity.setValue(45); d.true_transparency.setChecked(True); d.volume.setValue(10); d.quality.setCurrentIndex(d.quality.findData("720")); d.turn_off()
+assert d.browse_btn is not None and d.folder_combo is not None and d.folder_list is not None
+d.save_link.setText("https://youtu.be/M7lc1UVf-VE")
+d._save_pasted_link()
+assert any(f["name"] == "Saved" and f["items"][0]["url"] == "https://youtu.be/M7lc1UVf-VE" for f in cfg["folders"]), cfg
+d.folder_list.setCurrentRow(0)
+d.play_selected()
+assert cfg["on"] is True and cfg["url"] == "https://youtu.be/M7lc1UVf-VE", cfg
+d.strength.setValue(80); d.plate_opacity.setValue(45); d.true_transparency.setChecked(True); d.volume.setValue(10); d.quality.setCurrentIndex(d.quality.findData("720")); d.turn_off()
 assert cfg["on"] is False and cfg["strength"] == 80 and cfg["plate_opacity"] == 45 and cfg["true_transparency"] is True and cfg["volume"] == 10 and cfg["quality"] == "720", cfg
+assert any(f["name"] == "Saved" for f in cfg["folders"]), cfg  # turning off never deletes folders
 assert d.helper_btn is not None and "yt-dlp" in d.helper_btn.text()
 assert any("backdrop.start" in e for e in evals) and any('"strength": 80' in e for e in evals) and any('"true_transparency": true' in e for e in evals)
 d.close(); app.processEvents()
