@@ -4,16 +4,18 @@
 
 ## What it does
 
-- **Frosted-glass card over video.** Your card sits on a centered, translucent frosted-glass plate so text stays easy to read while the video glows softly behind and around it. Works with stock Anki as well as theme and UI add-ons like Onigiri, Synapse, AMBOSS, and AnKing card templates.
-- **Quick controls while studying.** A small tab on the right edge opens a compact panel that never steals keyboard focus from Space or 1–4:
-  - Play / Pause, Hide picture (keep sound), Turn on / off
+- **Frosted-glass card over video.** Your card sits on a centered, translucent frosted-glass plate with its own **Study card** translucency slider so text stays easy to read while the video glows softly behind and around it. Works with stock Anki as well as theme and UI add-ons like Onigiri, Synapse, AMBOSS, and AnKing card templates.
+- **Multi-view (1–4 videos or streams at once).** Stack up to 4 videos or live streams behind your cards (2 split evenly, 3 arranged 2-on-top + 1-on-bottom, 4 in a 2×2 grid) without cropping landscape, vertical, or resized windows. Mute or remove individual streams anytime.
+- **Quick controls while studying.** A small tab on the right edge opens a compact panel that auto-minimizes when you click back to study and never steals keyboard focus from Space or 1–4:
+  - Play / Pause, Hide picture (keep sound), **Break zone**, Turn on / off
   - **Position** scrub bar for regular videos (automatically hidden for live streams)
-  - **Backdrop** strength slider (from soft blur to clear) and **Volume** slider
-  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`) for live streams
-  - Paste a link or one-click play your copied link or recent videos
+  - **Backdrop** blur/opacity, **Study card** opacity, and **Volume** sliders
+  - **Stream quality** (`Auto`, `360`, `480`, `720`, `1080`, `1440`, `4K`) for live streams
+  - Paste any link, one-click play your copied link, manage/delete **Recent** links, or open the built-in **Search / Browse** pop-up (`🔍`)
+- **Break zone.** Take a breather cleanly without inflating your Anki card timing or breaking Pomodoro timers (compatible with Pomodoro Bar and other Pomodoro add-ons) while watching your video/stream clearly with a live break/rest countdown.
 - **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card.
 - **Auto-ducks for audio.** Automatically turns the backdrop down to 1/4 volume while Anki card audio, `{{tts}}`, or the Read Aloud add-on is speaking, then brings it back up.
-- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, direct `.webm`/`.mp4` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free).
+- **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Adaptive `30–60 fps` (or set `multi_fps` in add-on config) keeps multi-stream CPU usage low.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 
 <img src="https://i.imgur.com/9hLfxl1.png" width="640" alt="Right-edge quick controls panel with position, strength, volume and stream quality">

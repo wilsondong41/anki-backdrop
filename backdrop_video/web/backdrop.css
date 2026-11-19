@@ -34,21 +34,91 @@
   overflow: hidden;
   pointer-events: none;
   background: var(--bd-canvas, #2c2c2c);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
-/* Cover the window like a wallpaper; scaled up slightly so blurred edges don't show. */
-#bd-layer > * {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: max(100vw, 177.78vh);
-  height: max(100vh, 56.25vw);
-  transform: translate(-50%, -50%) scale(1.08);
+#bd-layer.bd-n2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bd-layer.bd-n3 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+#bd-layer.bd-n3 > .bd-slot:last-child {
+  grid-column: 1 / -1;
+}
+
+#bd-layer.bd-n4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+/* Line multi-video edges up flush at the center without cropping (contain preserves the full frame). */
+#bd-layer.bd-n2 > .bd-slot:first-child > video { object-position: right center; }
+#bd-layer.bd-n2 > .bd-slot:nth-child(2) > video { object-position: left center; }
+#bd-layer.bd-n3 > .bd-slot:first-child > video { object-position: right bottom; }
+#bd-layer.bd-n3 > .bd-slot:nth-child(2) > video { object-position: left bottom; }
+#bd-layer.bd-n3 > .bd-slot:nth-child(3) > video { object-position: center top; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(1) > video { object-position: right bottom; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(2) > video { object-position: left bottom; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(3) > video { object-position: right top; }
+#bd-layer.bd-n4 > .bd-slot:nth-child(4) > video { object-position: left top; }
+
+@media (max-aspect-ratio: 1/1) {
+  #bd-layer.bd-n2 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  #bd-layer.bd-n2 > .bd-slot:first-child > video { object-position: center bottom; }
+  #bd-layer.bd-n2 > .bd-slot:nth-child(2) > video { object-position: center top; }
+  #bd-layer.bd-n3 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
+  #bd-layer.bd-n3 > .bd-slot:last-child {
+    grid-column: auto;
+  }
+  #bd-layer.bd-n3 > .bd-slot > video { object-position: center center; }
+  #bd-layer.bd-n3 > .bd-slot:first-child > video { object-position: center bottom; }
+  #bd-layer.bd-n3 > .bd-slot:last-child > video { object-position: center top; }
+}
+
+@media (max-aspect-ratio: 3/4) {
+  #bd-layer.bd-n4 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
+  #bd-layer.bd-n4 > .bd-slot > video { object-position: center center; }
+}
+
+#bd-layer .bd-slot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Fit inside each tile across landscape, vertical, and resized layouts; overscan only with blur so clear video never zooms. */
+#bd-layer .bd-slot > * {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transform: scale(var(--bd-scale, 1));
   border: 0;
-  object-fit: cover;
+  object-fit: contain;
   opacity: var(--bd-opacity, 0.5);
-  filter: blur(var(--bd-blur, 25px));
-  transition: opacity 0.4s, filter 0.4s;
+  filter: var(--bd-filter, blur(25px));
+  transition: opacity 0.4s, filter 0.4s, transform 0.25s;
+}
+
+#bd-layer .bd-slot.bd-kind-page > * {
+  transform: scale(1);
 }
 
 /* Centered reading card with frosted glass on ::before so #qa never traps position:fixed popups/tooltips. */
@@ -114,8 +184,9 @@
 }
 
 /* Software rendering: blur costs a whole CPU core, so the video is only faded and glass blur is off. Must stay above the peek rule. */
-:root.bd-lite #bd-layer > * {
+:root.bd-lite #bd-layer .bd-slot > * {
   filter: none;
+  transform: scale(1);
   opacity: calc(var(--bd-opacity, 0.5) * 0.5);
 }
 
@@ -124,27 +195,91 @@
 :root.bd-lite .white-box,
 :root.bd-lite .congrats-card,
 :root.bd-lite .onigiri-ankimon-team-widget,
-:root.bd-lite.bd-stock-over body > center {
+:root.bd-lite.bd-stock-over body > center,
+:root.bd-nopic #qa::before,
+:root.bd-nopic .stats-container,
+:root.bd-nopic .white-box,
+:root.bd-nopic .congrats-card,
+:root.bd-nopic .onigiri-ankimon-team-widget,
+:root.bd-nopic.bd-stock-over body > center,
+:root.bd-noglass #qa::before,
+:root.bd-noglass .stats-container,
+:root.bd-noglass .white-box,
+:root.bd-noglass .congrats-card,
+:root.bd-noglass .onigiri-ankimon-team-widget,
+:root.bd-noglass.bd-stock-over body > center {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
 
-:root.bd-peek #bd-layer > * {
+:root.bd-peek #bd-layer .bd-slot > *,
+:root.bd-break #bd-layer .bd-slot > * {
   opacity: 1;
-  filter: none;
+  filter: none !important;
+  transform: scale(1);
+}
+
+:root.bd-break body {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.2s;
+}
+
+#bd-break-pill {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483001;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font: 13px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
+  background: rgba(30, 30, 34, 0.88);
+  color: #f3f4f6;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+:root.bd-break #bd-break-pill {
+  display: flex;
+}
+
+#bd-break-pill button {
+  margin: 0;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  font: 600 12px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif;
+  background: #3b82f6;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+#bd-break-pill.bd-rest-done button {
+  background: #f59e0b;
+  color: #111827;
 }
 
 :root.bd-peek #qa,
 :root.bd-peek .overview-center-container,
 :root.bd-peek #overview-wrapper,
+:root.bd-peek .stats-container,
+:root.bd-peek .congrats-card,
 :root.bd-peek.bd-stock-over body > center {
   opacity: 0.12;
   transition: opacity 0.2s;
 }
 
-/* Picture hidden, sound kept: hidden, not removed, so playback goes on. */
+/* Picture hidden, sound kept: hidden and blur bypassed so GPU skips offscreen passes while playback goes on. */
 :root.bd-nopic #bd-layer {
   visibility: hidden;
+}
+
+:root.bd-nopic #bd-layer .bd-slot > * {
+  filter: none !important;
 }
 
 /* ---- Quick controls: a tab on the right edge that opens a small panel ---- */
@@ -334,13 +469,14 @@
 
 #bd-panel .bd-pills {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
 }
 
 #bd-panel .bd-pill {
-  flex: 1;
-  padding: 4px 0;
+  flex: 1 0 22%;
+  padding: 4px 2px;
   font-size: 11px;
   text-align: center;
   color: var(--bd-dim);
@@ -399,6 +535,71 @@
   color: #ffffff;
 }
 
+#bd-panel .bd-link button.bd-add,
+#bd-panel .bd-link button.bd-browse {
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--bd-fg);
+  border: 1px solid var(--bd-line);
+}
+
+#bd-panel .bd-link button.bd-browse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 6px;
+}
+
+#bd-panel .bd-link button.bd-browse svg {
+  width: 14px;
+  height: 14px;
+}
+
+#bd-panel .bd-link button.bd-add[hidden] {
+  display: none;
+}
+
+#bd-panel .bd-slots {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#bd-panel .bd-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: var(--bd-hover);
+}
+
+#bd-panel .bd-slot-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bd-panel .bd-slot-btn {
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-slot-btn:hover {
+  color: var(--bd-fg);
+  background: var(--bd-line);
+}
+
+#bd-panel .bd-slot-btn.bd-muted {
+  color: var(--bd-accent);
+}
+
 #bd-panel .bd-label {
   margin: 10px 0 2px;
   font-size: 11px;
@@ -407,15 +608,34 @@
   color: var(--bd-dim);
 }
 
+#bd-panel .bd-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 #bd-panel .bd-item {
+  flex: 1;
+  min-width: 0;
   display: block;
-  width: 100%;
   padding: 4px 6px;
   border-radius: 6px;
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#bd-panel .bd-recent-del {
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--bd-dim);
+}
+
+#bd-panel .bd-recent-del:hover {
+  color: var(--bd-fg);
+  background: var(--bd-hover);
 }
 
 #bd-panel .bd-hint {

@@ -1,12 +1,16 @@
 {
     "url": "",
+    "urls": [],
+    "muted": [],
     "on": false,
     "strength": 30,
+    "plate_opacity": 70,
     "volume": 50,
     "paused": false,
     "picture": true,
     "panel": false,
     "quality": "auto",
+    "multi_fps": "auto",
     "title": "",
     "recent": []
 }

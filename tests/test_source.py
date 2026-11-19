@@ -43,8 +43,8 @@ store = {}
 aqt.mw.addonManager.getConfig = lambda n: dict(store)
 aqt.mw.addonManager.writeConfig = lambda n, c: store.update(c)
 aqt.mw.state = "deckBrowser"
-ns["apply"]({"strength": 250, "volume": "50", "panel": 1, "picture": False, "evil": True, "quality": "720"})
-assert store["strength"] == 100 and store["volume"] == 50 and store["panel"] is False and store["quality"] == "720" and "evil" not in store
+ns["apply"]({"strength": 250, "plate_opacity": -10, "volume": "50", "panel": 1, "picture": False, "evil": True, "quality": "720"})
+assert store["strength"] == 100 and store["plate_opacity"] == 0 and store["volume"] == 50 and store["panel"] is False and store["quality"] == "720" and "evil" not in store
 ns["apply"]({"quality": "999", "volume": float("nan"), "strength": 42})
 assert store["quality"] == "720" and store["strength"] == 42 and store["volume"] == 50
 for i in range(7):
@@ -73,32 +73,57 @@ win = live.pick_codecs("  --ovc=libaom-av1  libaom AV1\n  --ovc=libx264 x\n", " 
 assert "--ovc=libaom-av1" in win and "--oacopts=strict=-2" in win, win
 assert "--vf=scale=-2:720" in live.pick_codecs("  --ovc=libvpx           x\n", "", "720")
 assert "--vf=scale=-2:720" in live.pick_codecs("  --ovc=libaom-av1  x\n", "", "720")
+assert "min(ih,2160)" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "2160"))
+assert "fps=30" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "480", max_fps=30))
+assert 30 <= live.adaptive_fps(1, "--ovc=libvpx ") <= 60 and live.adaptive_fps(3, "--ovc=libvpx ") == 30
+assert live.adaptive_fps(3, "--ovc=libvpx ", multi_fps=60) == 60 and live.adaptive_fps(3, "--ovc=libvpx ", multi_fps=0) == 0
+assert "Auto:" in live.effective_note("auto", 1) and "source fps" in live.effective_note("auto", 3, multi_fps=0)
+assert "--hwdec=auto-safe" in live.convert_cmd("v", None)
+assert "threads=4" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "1440"))
 assert "--ovc=libvpx" not in live.pick_codecs("  --ovc=libvpx-vp9  x\n", "") and live.pick_codecs("--ovc=libx264", "") == []
 # Channel /live pages and Twitch are worth a stream lookup; ordinary pages are not.
 calls = []
 ns["go_live"] = lambda url, quiet=False: calls.append((url, quiet))
 os_path_exists = ns["os"].path.exists
 ns["os"].path.exists = lambda p: False  # helper not downloaded yet
+store.pop("urls", None)  # simulate legacy config with only "url"
 store["url"] = "https://www.twitch.tv/somechannel"
 assert ns["state"](True)["src"] == "about:blank"  # Twitch refuses framing; blank until the stream is found
 ns["try_live"](ns["state"](True))
 store["url"] = "https://example.com/"
 ns["try_live"](ns["state"](True))
+store["url"] = "https://example.com/live.m3u8"
+assert ns["state"](True)["src"] == "about:blank"  # raw .m3u8 waits for mpv conversion instead of downloading in iframe
+ns["try_live"](ns["state"](True))
 ns["os"].path.exists = os_path_exists
-assert len(calls) == 1 and calls[0][1] is False, calls
+assert len(calls) == 2 and calls[0][1] is False and calls[1][0] == "https://example.com/live.m3u8", calls
+# Explicit Play/URL paste asks for yt-dlp even on general pages.
+store["url"] = "https://vimeo.com/123"
+ns["try_live"]({"on": True, "kind": "page", "src": "https://vimeo.com/123"}, prompt_if_missing=True)
+assert len(calls) == 3 and calls[2] == ("https://vimeo.com/123", True), calls
+# register_direct wires .m3u8/.mp4 directly through mpv without yt-dlp.
+live.codecs = lambda q="auto": ["--ovc=libvpx"]
+live.shutil.which = lambda c: "/usr/bin/mpv"
+assert live.register_direct("https://example.com/live.m3u8", "720") == ""
+assert live.ready("https://example.com/live.m3u8") and live.address("https://example.com/live.m3u8").endswith(".webm")
+live.forget("https://example.com/live.m3u8")
 # A page a quiet lookup found no stream on isn't looked up again on every page.
 store["url"] = "https://example.com/"
 ns["_not_live"].add(store["url"])
 ns["try_live"]({"on": True, "kind": "page", "src": "https://example.com/"})
-assert len(calls) == 1, calls
+assert len(calls) == 3, calls
 store["chat"] = True  # a key an older version saved
 assert "chat" not in ns["conf"]()
-# Copied stream-site links are offered in the panel; ordinary pages are not.
+# Copied http(s) links are offered in the panel; bare non-video paths and plain text are not.
 clip = []
 ns["mw"].app = types.SimpleNamespace(clipboard=lambda: types.SimpleNamespace(text=lambda: clip[-1]))
 clip.append("https://www.twitch.tv/somechannel")
 assert ns["clipboard_link"]() == clip[-1]
 clip.append("https://example.com/page")
+assert ns["clipboard_link"]() == clip[-1]
+clip.append("example.com/page")
+assert ns["clipboard_link"]() == ""
+clip.append("just plain text")
 assert ns["clipboard_link"]() == ""
 # Whitespace-only URL doesn't trigger refresh or save.
 calls_ref = []
@@ -129,4 +154,54 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         live.urllib.request.urlopen = orig_urlopen
 assert "yt_dlp" not in sys.modules and "yt_dlp.utils" not in sys.modules
+# Multi-stream up to 4: add_url, cap at 4, mute per slot, remove_url, and fallback to single.
+store.clear()
+ns["apply"]({"url": "https://example.com/1.webm"})
+assert ns["apply"] or True
+for u in ["https://example.com/2.webm", "https://example.com/3.webm", "https://example.com/4.webm", "https://example.com/5.webm"]:
+    ns["apply"]({"add_url": u})
+st4 = ns["state"](True)
+assert len(st4["urls"]) == 4 and len(st4["streams"]) == 4 and st4["urls"][-1] == "https://example.com/4.webm", st4
+ns["apply"]({"muted": ["https://example.com/2.webm", "https://not-active.webm"]})
+assert ns["state"](True)["muted"] == ["https://example.com/2.webm"]
+ns["apply"]({"remove_url": "https://example.com/1.webm"})
+st3 = ns["state"](True)
+assert st3["urls"] == ["https://example.com/2.webm", "https://example.com/3.webm", "https://example.com/4.webm"] and st3["url"] == "https://example.com/2.webm", st3
+# Deleting from recent works, and removing the last active stream clears url/on cleanly.
+ns["apply"]({"forget_recent": "https://example.com/1.webm"})
+assert all(r["url"] != "https://example.com/1.webm" for r in ns["conf"]()["recent"])
+for u in list(st3["urls"]):
+    ns["apply"]({"remove_url": u})
+assert not ns["conf"]()["on"] and ns["conf"]()["url"] == "" and ns["conf"]()["urls"] == []
+# Break Zone moves review -> overview cleanly and restores on exit, exposing Pomodoro Bar or generic Pomodoro rest status.
+moves = []
+ns["mw"].state = "review"
+ns["mw"].moveToState = lambda s: (moves.append(s), setattr(ns["mw"], "state", s))
+ns["refresh"] = lambda *a, **k: None
+fake_pb = types.ModuleType("pb_fake")
+fake_pb.__file__ = "/addons21/239058710/__init__.py"
+fake_pb._resting = True
+fake_pb._completed = False
+fake_pb._rest_duration_seconds = lambda: 300
+fake_pb._rest_elapsed = lambda: 60
+sys.modules["pb_fake"] = fake_pb
+try:
+    ns["on_js_message"]((False, None), "backdrop:break:1", None)
+    binfo = ns["state"](False)["break_info"]
+    assert moves == ["overview"] and binfo["active"] and binfo["rest_left"] == 240, (moves, binfo)
+    ns["on_js_message"]((False, None), "backdrop:break:0", None)
+    assert moves == ["overview", "review"] and not ns["state"](False)["break_info"]["active"], moves
+finally:
+    sys.modules.pop("pb_fake", None)
+generic_pb = types.ModuleType("pb_generic")
+generic_pb.__file__ = "/addons21/999999/__init__.py"
+generic_pb.is_resting = lambda: True
+generic_pb.rest_remaining = lambda: 90
+sys.modules["pb_generic"] = generic_pb
+try:
+    ns["on_js_message"]((False, None), "backdrop:break:1", None)
+    assert ns["state"](False)["break_info"]["rest_left"] == 90
+    ns["on_js_message"]((False, None), "backdrop:break:0", None)
+finally:
+    sys.modules.pop("pb_generic", None)
 print("ok")

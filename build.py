@@ -6,7 +6,7 @@ import zipfile
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "backdrop_video")
 DIST = os.path.join(ROOT, "dist")
-FILES = ["__init__.py", "live.py", "config.json", "manifest.json", "web/backdrop.js", "web/backdrop.css"]
+FILES = ["__init__.py", "live.py", "config.json", "config.md", "manifest.json", "web/backdrop.js", "web/backdrop.css"]
 
 
 def package(out: str, skip: set) -> None:

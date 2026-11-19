@@ -28,9 +28,13 @@ b.mw = mw
 b.open_dialog()
 d = b._dialog
 assert d.link.text() == "https://youtu.be/M7lc1UVf-VE", d.link.text()
-d.play(); d.strength.setValue(80); d.volume.setValue(10); d.quality.setCurrentIndex(d.quality.findData("720")); d.turn_off()
-assert cfg["on"] is False and cfg["strength"] == 80 and cfg["volume"] == 10 and cfg["quality"] == "720", cfg
+d.play(); d.strength.setValue(80); d.plate_opacity.setValue(45); d.volume.setValue(10); d.quality.setCurrentIndex(d.quality.findData("720")); d.turn_off()
+assert cfg["on"] is False and cfg["strength"] == 80 and cfg["plate_opacity"] == 45 and cfg["volume"] == 10 and cfg["quality"] == "720", cfg
 assert any("backdrop.start" in e for e in evals) and any('"strength": 80' in e for e in evals)
 d.close(); app.processEvents()
 assert b._dialog is None
+b.open_browse()
+assert b._browse is not None
+b._browse.close(); app.processEvents()
+assert b._browse is None
 print("dialog ok", aqt.qt.QT_VERSION_STR if hasattr(aqt.qt, "QT_VERSION_STR") else "")
