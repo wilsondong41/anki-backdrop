@@ -7,6 +7,7 @@ aqt = sys.modules["aqt"]
 aqt.gui_hooks = types.SimpleNamespace()
 aqt.mw = types.SimpleNamespace(addonManager=types.SimpleNamespace(
     addonFromModule=lambda n: "backdrop_video", setWebExports=lambda *a: None, getConfig=lambda n: None))
+aqt.mw.taskman = types.SimpleNamespace(run_in_background=lambda *a, **k: None)  # background work: not run here
 sys.modules["aqt.overview"].Overview = sys.modules["aqt.reviewer"].Reviewer = object
 sys.modules["aqt.utils"].tooltip = lambda *a, **k: None
 sys.modules["aqt.utils"].askUser = lambda *a, **k: False
@@ -86,6 +87,7 @@ assert live.stream_fps("youtu.be/aaaaaaaaaa3") == 60
 live.forget("youtu.be/aaaaaaaaaa3")
 assert live.stream_fps("youtu.be/aaaaaaaaaa3") is None
 assert "--hwdec=auto-safe" in live.convert_cmd("v", None)
+assert "--hr-seek=no" in live.convert_cmd("v", None, start=30) and "--hr-seek=no" not in live.convert_cmd("v", None)
 assert "threads=4" in " ".join(live.pick_codecs("  --ovc=libvpx           x\n", "", "1440"))
 assert "--ovc=libvpx" not in live.pick_codecs("  --ovc=libvpx-vp9  x\n", "") and live.pick_codecs("--ovc=libx264", "") == []
 # Channel /live pages and Twitch are worth a stream lookup; ordinary pages are not.
@@ -265,16 +267,30 @@ asked = []
 orig_ver = sys.version_info
 sys.version_info = (3, 12, 0)
 ns["os"].path.exists = lambda p: False
-ns["_ask_download_helper"] = lambda: (asked.append(1) or False, False)
+ns["_ask_download_helper"] = lambda *a: (asked.append(1) or False, False)
+ns["_later"] = lambda fn: fn()  # the question waits for the screen in Anki; here it runs at once
+store["urls"] = [f"https://www.twitch.tv/stream{i}" for i in range(1, 5)]  # only playing links are asked about
 try:
     ns["go_live"]("https://www.twitch.tv/stream1")
     ns["go_live"]("https://www.twitch.tv/stream1")  # same URL suppressed this session until replayed
     ns["go_live"]("https://www.twitch.tv/stream2")  # different stream still asks
     assert len(asked) == 2, asked
-    ns["_ask_download_helper"] = lambda: (asked.append(2) or False, True)  # check "Don't show this again"
+    ns["_ask_download_helper"] = lambda *a: (asked.append(2) or False, True)  # check "Don't show this again"
     ns["go_live"]("https://www.twitch.tv/stream3")
     ns["go_live"]("https://www.twitch.tv/stream4")  # now globally suppressed
     assert len(asked) == 3 and ns["conf"]()["suppress_ytdlp_prompt"] is True, asked
+    # The question never opens while a page is being built, and only one shows at a time.
+    store["suppress_ytdlp_prompt"] = False
+    ns["_declined_urls"].clear()
+    pending, asked2 = [], []
+    ns["_later"] = pending.append
+    ns["_ask_download_helper"] = lambda why: (asked2.append(why) or True, False)
+    ns["go_live"]("https://www.twitch.tv/stream1")
+    ns["go_live"]("https://www.twitch.tv/stream2")
+    assert len(pending) == 1 and not asked2
+    pending[0]()
+    assert len(asked2) == 1 and "live streams from twitch.tv" in asked2[0] and "https://www.twitch.tv/stream1" in ns["_looking"], asked2
+    ns["_looking"].clear()
 finally:
     sys.version_info = orig_ver
     ns["os"].path.exists = os_path_exists
@@ -485,6 +501,65 @@ ns["apply"]({"rename_item": {"folder": "cams", "url": "youtu.be/aaaaaaaaaa3", "t
 assert store["folders"][0]["items"][0]["title"] == "My stream" and store["recent"][0]["title"] == "My stream" and store["title"] == "My stream"
 assert ns["rename_saved"]("Cams", "youtu.be/missing", "x") is False and ns["rename_saved"]("Cams", "youtu.be/aaaaaaaaaa3", "  ") is False
 # Your own quick links: only web addresses with a name, at most 6.
+# A YouTube video whose owner allows it only on YouTube goes to the converter instead of giving up,
+# once per 10 minutes, and only for a link that is playing (card scripts can send this message too).
+tips, conv = [], []
+ns["tooltip"] = lambda msg, **k: tips.append(msg)
+orig_gl = ns["go_live"]
+ns["go_live"] = lambda url, quiet=False: conv.append(url)
+store.update(on=True, url="https://www.youtube.com/watch?v=w24FmUsEK9Q", urls=["https://www.youtube.com/watch?v=w24FmUsEK9Q"])
+ns["on_js_message"]((False, None), "backdrop:error:150:https://www.youtube.com/watch?v=w24FmUsEK9Q", None)
+assert conv == ["https://www.youtube.com/watch?v=w24FmUsEK9Q"] and not tips, (conv, tips)
+ns["on_js_message"]((False, None), "backdrop:error:150:https://www.youtube.com/watch?v=w24FmUsEK9Q", None)
+assert len(conv) == 1 and len(tips) == 1 and "only plays on YouTube" in tips[0], (conv, tips)  # the converter couldn't: say so, no retry loop
+ns["on_js_message"]((False, None), "backdrop:error:101:https://www.youtube.com/watch?v=notPlaying1", None)
+assert len(conv) == 1  # not a playing link: no lookup
+ns["go_live"] = orig_gl
+# Any site that refuses to be shown inside Anki: found from its headers, then played through the helper.
+from email.message import Message
+def hdrs(**kv):
+    m = Message()
+    for k, v in kv.items():
+        m[k.replace("_", "-")] = v
+    return m
+assert live.refuses_framing(hdrs(X_Frame_Options="SAMEORIGIN")) and live.refuses_framing(hdrs(X_Frame_Options="deny"))
+assert live.refuses_framing(hdrs(Content_Security_Policy="default-src 'self'; frame-ancestors 'self' https://a.com"))
+assert not live.refuses_framing(hdrs(Content_Security_Policy="frame-ancestors *; img-src *"))
+assert not live.refuses_framing(hdrs(Content_Type="text/html"))
+assert ns["_site"]("https://www.example.com/x") == "example.com" and ns["_site"]("youtu.be/abc") == "YouTube"
+runs = []
+ns["mw"].taskman = types.SimpleNamespace(run_in_background=lambda task, done: runs.append((task, done)))
+fake = types.SimpleNamespace(result=lambda: True)
+conv.clear(); tips.clear()
+ns["go_live"] = lambda url, quiet=False: conv.append(url)
+site = "https://cams.example.com/room1"
+store.update(urls=[site], url=site)
+ns["check_frame"](site); ns["check_frame"](site)
+assert len(runs) == 1  # asked once per link
+runs[0][1](fake)
+assert conv == [site] and site in ns["_blocked"]  # refused: the helper is used (or offered) instead of a blank page
+site2 = "https://cams.example.com/room2"
+store.update(urls=[site2], url=site2)
+ns["_not_live"].add(site2)  # the helper already looked and found no video
+ns["check_frame"](site2); runs[-1][1](fake)
+assert len(conv) == 1 and tips and "cams.example.com doesn't allow" in tips[-1], tips
+ns["go_live"] = orig_gl
+# A YouTube link that needed the converter goes straight to it next time (no ~2 s failed embed first).
+yt = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+ns["os"].path.exists = lambda p: True  # helper downloaded
+store.update(convert_links=[yt], urls=[yt], url=yt)
+spec = ns["_stream_spec"](yt, 0, False)
+assert spec["src"] == "about:blank" and spec.get("convert"), spec
+conv.clear()
+ns["go_live"] = lambda url, quiet=False: conv.append((url, quiet))
+ns["try_live"](ns["state"](True))
+assert conv == [(yt, True)], conv
+ns["remember_convert"](yt, False)
+assert ns["convert_links"]() == [] and not ns["_stream_spec"](yt, 0, False).get("convert")
+store["convert_links"] = "junk"
+assert ns["convert_links"]() == []
+ns["os"].path.exists = os_path_exists
+ns["go_live"] = orig_gl
 store["quick_links"] = [{"label": "Mine", "url": "https://example.com/x"}, {"label": "Bad", "url": "javascript:alert(1)"},
                         {"label": "", "url": "https://example.com/y"}] + [{"label": f"L{i}", "url": f"https://e{i}.com"} for i in range(9)]
 q = ns["quick_links"]()

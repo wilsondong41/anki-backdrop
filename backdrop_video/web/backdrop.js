@@ -106,6 +106,8 @@ window.backdrop = (() => {
       media = document.createElement("video");
       const still = cfg.paused || slot.held;
       Object.assign(media, { autoplay: !still, loop: !spec.live, playsInline: true });
+      // Anki's own converter allows copying frames, so the last one can be kept across screens (see pagehide).
+      if (spec.live) media.crossOrigin = "anonymous";
       // A paused converted stream loads just long enough to show its frame, then lets the converter stop.
       slot.priming = !!(spec.live && still);
       if (spec.src) media.src = spec.src;
@@ -162,7 +164,7 @@ window.backdrop = (() => {
       // Other websites can't navigate Anki's window away or open pop-ups; YouTube's player is left as-is.
       if (spec.kind === "page") media.setAttribute("sandbox", "allow-scripts allow-same-origin");
       media.referrerPolicy = "strict-origin-when-cross-origin";
-      media.src = spec.kind === "youtube" ? spec.src + "&cc_load_policy=0&cc_lang_pref=none" : spec.src;
+      media.src = spec.kind === "youtube" && /^https:/.test(spec.src) ? spec.src + "&cc_load_policy=0&cc_lang_pref=none" : spec.src;
       media.allow = "autoplay; encrypted-media";
       media.tabIndex = -1;
       if (spec.kind === "page") {
@@ -179,6 +181,7 @@ window.backdrop = (() => {
     }
     slot.media = media;
     el.appendChild(media);
+    if (pageFresh) restoreStill(slot);
     return slot;
   }
 
@@ -221,7 +224,8 @@ window.backdrop = (() => {
       // The same link reloaded as a new video (album next/previous, new quality): keep its last frame meanwhile.
       const heir = nextSlots.find((n) => n.url === prev[i].url && !prev.includes(n));
       if (heir && heir.media && heir.media.tagName === "VIDEO") {
-        holdFrame(heir, prev[i].media);
+        const p = prev[i];
+        holdFrame(heir, p.media && p.media.tagName === "VIDEO" && p.media.readyState >= 2 ? p.media : (p.still && !p.still.hidden ? p.still : null));
         releaseFrame(heir);
       }
       unmountSlot(prev[i]);
@@ -234,6 +238,7 @@ window.backdrop = (() => {
       el.dataset.pos = String(i + 1);
     }
     slots = nextSlots;
+    pageFresh = false;
     const activeUrls = new Set(slots.map((s) => s.url));
     for (const u of Array.from(seekOpenSlots)) {
       if (!activeUrls.has(u)) seekOpenSlots.delete(u);
@@ -399,14 +404,14 @@ window.backdrop = (() => {
   // A still copy of the video's current frame, shown while the video reloads (a skip, pause or resume)
   // so the backdrop never flashes blank. Drawing a video from the local converter is allowed; nothing is read back.
   function holdFrame(s, v = s.media) {
-    if (!v || v.tagName !== "VIDEO" || v.readyState < 2 || !v.videoWidth) return;
+    if (!v || (v.tagName === "VIDEO" ? v.readyState < 2 || !v.videoWidth : v.tagName !== "CANVAS" || !v.width)) return;
     if (!s.still) {
       s.still = document.createElement("canvas");
       s.still.className = "bd-still";
       s.el.appendChild(s.still);
     }
-    s.still.width = v.videoWidth;
-    s.still.height = v.videoHeight;
+    s.still.width = v.videoWidth || v.width;
+    s.still.height = v.videoHeight || v.height;
     try {
       s.still.getContext("2d").drawImage(v, 0, 0);
       s.still.hidden = false;
@@ -422,6 +427,65 @@ window.backdrop = (() => {
     const done = () => { if (!s.priming && s.still) s.still.hidden = true; };
     if (typeof v.requestVideoFrameCallback === "function") v.requestVideoFrameCallback(done);
     else v.addEventListener("playing", done, { once: true });
+  }
+
+  // Going between the deck overview and the cards loads a new page, which restarts every video (a converted stream
+  // needs ~2 s). The last frames are kept for the next page, so the picture stays put instead of going black.
+  const STILLS = "bd-stills";
+  let pageFresh = true;  // only the page's first layout uses them (later reloads keep their own frame, see syncSlots)
+  addEventListener("pagehide", () => {
+    if (!cfg || !cfg.on || cfg.picture === false) return;
+    const out = { t: Date.now(), s: {} };
+    for (const s of slots) {
+      const v = s.media && s.media.tagName === "VIDEO" && s.media.readyState >= 2 && s.media.videoWidth ? s.media
+        : (s.still && !s.still.hidden ? s.still : null);
+      if (!v) continue;
+      const vw = v.videoWidth || v.width, vh = v.videoHeight || v.height;
+      try {
+        const c = document.createElement("canvas");
+        c.width = Math.min(640, vw);
+        c.height = Math.round(c.width * vh / vw);
+        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        out.s[s.url] = c.toDataURL("image/jpeg", 0.7);
+      } catch (_) {}  // a video from a site that doesn't allow copying its picture
+    }
+    try { sessionStorage.setItem(STILLS, JSON.stringify(out)); } catch (_) {}
+  });
+
+  function restoreStill(s) {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(STILLS) || "null"); } catch (_) {}
+    let data = saved && Date.now() - saved.t < 15 * 60000 && saved.s && saved.s[s.url];
+    const yt = s.kind === "youtube" && /(?:youtu\.be\/|\/embed\/|\/shorts\/|\/live\/|[?&]v=)([\w-]{11})/.exec(s.url || "");
+    if (!data && yt) data = "https://i.ytimg.com/vi/" + yt[1] + "/mqdefault.jpg";  // YouTube's own preview picture
+    if (!data || (s.kind !== "video" && s.kind !== "youtube")) return;
+    const img = new Image();
+    img.onload = () => {
+      if (!slots.includes(s) && !s.el.isConnected) return;
+      if (s.kind === "video" && (s.media.readyState >= 2 || s.priming || (s.still && !s.still.hidden))) return;  // a fresher frame is there
+      if (s.kind === "youtube" && s.revealed) return;  // the player already shows its picture
+      if (!s.still) {
+        s.still = document.createElement("canvas");
+        s.still.className = "bd-still";
+        s.el.appendChild(s.still);
+      }
+      s.still.width = img.naturalWidth;
+      s.still.height = img.naturalHeight;
+      try { s.still.getContext("2d").drawImage(img, 0, 0); s.still.hidden = false; } catch (_) { return; }
+      if (s.kind === "video") releaseFrame(s);
+      else if (!s.revealed) s.media.classList.add("bd-wait");  // YouTube's player is black while it loads
+    };
+    img.src = data;
+    // Never stay hidden. (A link waiting for the converter has no player: its picture stays until the video comes.)
+    if (s.kind === "youtube" && s.src !== "about:blank") setTimeout(() => revealYT(s), 6000);
+  }
+
+  // YouTube's player shows its picture: drop the stand-in.
+  function revealYT(s) {
+    if (s.revealed) return;
+    s.revealed = true;
+    s.media.classList.remove("bd-wait");
+    if (s.still) setTimeout(() => { if (s.still) s.still.hidden = true; }, 250);
   }
 
   // Turned down while Anki plays card audio (see duck() in __init__.py) or Read Aloud speaks.
@@ -484,7 +548,7 @@ window.backdrop = (() => {
     if (!slot) return;
     let msg;
     try { msg = JSON.parse(e.data); } catch (_) { return; }
-    if (msg.event === "onError") return send("backdrop:error:" + msg.info + ":" + slot.url);
+    if (msg.event === "onError") { revealYT(slot); return send("backdrop:error:" + msg.info + ":" + slot.url); }
     // Re-sync volume once YouTube's player JS is ready in case load fired before its message listener attached.
     if (!slot.ytSynced && (msg.event === "onReady" || msg.event === "infoDelivery")) {
       slot.ytSynced = true;
@@ -532,6 +596,7 @@ window.backdrop = (() => {
       }
     }
     // Captions are a distraction behind a card; the player loads them when playback starts.
+    if (info.playerState === 1 || info.playerState === 2) revealYT(slot);
     if (info.playerState === 1) {
       ytSend(slot, { event: "command", func: "unloadModule", args: ["captions"] });
       applySlotVolume(slot);

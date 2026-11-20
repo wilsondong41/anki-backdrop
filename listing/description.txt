@@ -20,6 +20,8 @@
 - **Hold P to peek.** Hold **P** any time during review or on the deck overview to temporarily see the full video clearly; release to return to your card. Works on every site and screen (Onigiri layouts too), even when a website grabs the keyboard, and stays clear if a new card appears mid-peek.
 - **Auto-ducks for audio.** Automatically turns the backdrop down to 1/4 volume while Anki card audio, `{{tts}}`, or the Read Aloud add-on is speaking, then brings it back up.
 - **Live streams & webcams.** Works with YouTube, YouTube Live, Twitch, Kick, direct `.webm`/`.mp4`/`.m3u8`/`.mpd` links, and other `yt-dlp`-supported streams (no live chat, so it stays distraction-free). Frame rate is automatic (`30–60 fps` depending on your computer and stream count) unless you pick one.
+- **Plays videos other apps can't.** Many YouTube videos (most music, sports and other monetized uploads) and sites like Dailymotion, Reddit or GitHub refuse to play inside other apps. Backdrop notices, plays the video through the `yt-dlp` helper instead, remembers which YouTube links need it so they start faster next time, and tells you plainly if a page has no video to play.
+- **Smooth screen changes.** Going between the deck overview and your cards keeps the last picture on screen while the video reconnects, so the backdrop never flashes black.
 - **Nothing saved to disk.** Regular videos stream directly in the player; live streams are converted on the fly in memory and stop immediately when paused or when Anki closes.
 - **Stay signed in (optional, off by default).** Tick **Stay signed in** in the Browse window to keep your website logins after Anki closes. Only each site's login cookie is kept (never your passwords), on this computer only, in Anki's folder (not synced, never uploaded). Untick it to be asked whether to sign out of everything and delete them.
 
@@ -34,7 +36,7 @@
 
 ## Good to know
 
-- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. When a live or incompatible stream needs the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates), Backdrop Video prompts you (with a **Don't show this again** option) and also lets you download/update it anytime in **Tools → Backdrop Video…**. It uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory; regular YouTube videos need no extra download.
+- **Live streams (`yt-dlp`):** Anki's built-in browser can't play H.264 live streams directly. When a link needs the free `yt-dlp` helper (~3 MB, kept in `user_files` across updates), Backdrop Video asks once, says why, and **Download and Play** gets it and starts the video in one click (there's a **Don't show this again** option, and you can download/update it anytime in **Tools → Backdrop Video…**). It uses Anki's bundled `mpv` (Mac & Windows; Linux uses system `mpv`) to stream WebM in memory. Many YouTube videos play without it.
 - **Software rendering:** If Anki is set to software video rendering, blur is turned off automatically to keep CPU usage low.
 - **Requires internet:** Videos stream live over your connection and aren't downloaded offline.
 

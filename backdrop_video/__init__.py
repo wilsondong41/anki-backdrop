@@ -31,7 +31,8 @@ MAX_FOLDER_ITEMS = 50
 DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70,
             "true_transparency": False, "volume": 50, "time": 0, "paused": False, "picture": True,
             "panel": False, "quality": "auto", "multi_fps": "auto", "suppress_ytdlp_prompt": False,
-            "title": "", "recent": [], "folders": [], "album_pos": {}, "held": [], "volumes": {}, "quick_links": [], "break_minutes": 0, "stay_signed_in": False}
+            "title": "", "recent": [], "folders": [], "album_pos": {}, "held": [], "volumes": {}, "quick_links": [], "break_minutes": 0, "stay_signed_in": False,
+            "convert_links": []}  # YouTube links that play only on YouTube: next time they go straight to the converter
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 # Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
@@ -69,6 +70,31 @@ _declined_urls = set()  # links declined this session (without "Don't show again
 _retried = {}  # link -> when its stream was last looked up again after it stopped
 _not_live = set()  # links a quiet lookup found no stream for, so it isn't repeated every page
 _direct_urls = set()  # direct video files (.mp4/.mov) that fell back to mpv -> WebM transcoding
+_blocked = {}  # link that won't show inside Anki (YouTube owner's choice, or a site that refuses framing) -> last try
+_frame_checked = {}  # page link -> True/False once we know whether its site refuses to be shown inside other apps
+NEED_HELPER = "To play it in Anki, download the free yt-dlp helper in Tools → Backdrop Video…"
+
+
+def _site(url: str) -> str:
+    host = (urlparse(url if "://" in url else "https://" + url).hostname or "this site").lower()
+    return "YouTube" if host.endswith(("youtube.com", "youtu.be")) else host.removeprefix("www.")
+
+
+def convert_links(c: dict = None) -> list:
+    raw = (c or conf()).get("convert_links")
+    return [u for u in raw if isinstance(u, str)][-50:] if isinstance(raw, list) else []
+
+
+def remember_convert(url: str, keep: bool) -> None:
+    links = [u for u in convert_links() if u != url] + ([url] if keep else [])
+    save(convert_links=links[-50:])
+
+
+def blocked_msg(url: str) -> str:
+    if _site(url) == "YouTube":
+        return "This video only plays on YouTube, and Backdrop couldn't load it another way. Try another link."
+    return (f"{_site(url)} doesn't allow being shown inside other apps, and Backdrop couldn't find a video on the "
+            "page to play instead. Try the video's own link, or another one.")
 _web_focus = ""  # where the keyboard is inside mw.web: "" (the card), "typing" (a text box), "frame" (a backdrop website)
 _live_checking = set()  # links whose live status is being looked up
 _live_pool = None  # at most 3 lookups at once
@@ -442,6 +468,8 @@ def _stream_spec(url: str, start: int, paused: bool, title: str = "") -> dict:
         STREAM_SITES.search(urlparse(spec["src"]).hostname or "") or LIVE_MEDIA.search(urlparse(spec["src"]).path)
     ):
         spec["src"] = "about:blank"  # framed sites or raw manifests won't play directly; live.py replaces this once ready
+    elif spec["kind"] == "youtube" and url in convert_links() and os.path.exists(live.helper_path(ADDON_DIR)):
+        spec.update(src="about:blank", convert=True)  # YouTube refused it before: skip the ~2 s failed attempt
     fps = live.stream_fps(url)
     if fps:
         spec["fps"] = fps
@@ -658,7 +686,17 @@ def on_js_message(handled, message, context):
         code = parts[2]
         slot_url = parts[3] if len(parts) > 3 and parts[3] else conf()["url"]
         if code in ("101", "150", "152", "153"):
-            tooltip("This video can't play inside Anki: its owner only allows it on YouTube. Try another link.", period=6000)
+            # The owner turned off playing outside YouTube; the converter (as for Twitch) reads it from YouTube itself.
+            # Once per 10 minutes, so a link the converter can't play doesn't retry on every card.
+            if slot_url in active_urls() and time.time() - _blocked.get(slot_url, 0) > 600:
+                _blocked[slot_url] = time.time()
+                _not_live.discard(slot_url)
+                go_live(slot_url)
+            elif not live.ready(slot_url) and slot_url not in _looking:
+                if not os.path.exists(live.helper_path(ADDON_DIR)):
+                    tooltip(f"This video only plays on {_site(slot_url)}. " + NEED_HELPER, period=7000)
+                else:
+                    tooltip(blocked_msg(slot_url), period=6000)
         elif code == "live":
             if slot_url:
                 go_live(slot_url)
@@ -774,12 +812,20 @@ def on_js_message(handled, message, context):
     return True, None
 
 
-def _ask_download_helper() -> tuple:
+def _helper_reason(url: str) -> str:
+    if url in _blocked:
+        return f"This video only plays on {_site(url)} itself, so Backdrop needs a helper to show it in Anki."
+    if STREAM_SITES.search(urlparse(source(url, 0)["src"]).hostname or "") or LIVE_MEDIA.search(url):
+        return f"To play live streams from {_site(url)}, Backdrop needs a helper."
+    return "To play just the video or live stream from this page (instead of the whole website), Backdrop needs a helper."
+
+
+def _ask_download_helper(why: str) -> tuple:
     """Prompt to download yt-dlp with a 'Don't show again' checkbox. Returns (accepted, dont_show_again)."""
     msg = (
-        "Anki's built-in browser can't play this live stream or web video directly without a free helper "
-        "called yt-dlp (~3 MB, from github.com/yt-dlp).\n\n"
-        "Download yt-dlp now? (You can also download it anytime in Tools → Backdrop Video…)"
+        f"{why}\n\nThe helper is yt-dlp: free, widely used, 3 MB, downloaded once from github.com/yt-dlp, and it "
+        "keeps itself up to date. It also plays Twitch, Kick, YouTube Live and most video sites.\n\n"
+        "Download it and play?"
     )
     try:
         from aqt.qt import QCheckBox, QMessageBox
@@ -788,7 +834,7 @@ def _ask_download_helper() -> tuple:
         box.setText(msg)
         cb = QCheckBox("Don't show this again")
         box.setCheckBox(cb)
-        dl_btn = box.addButton("Download yt-dlp", QMessageBox.ButtonRole.AcceptRole)
+        dl_btn = box.addButton("Download and Play", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Not Now", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(dl_btn)
         box.exec()
@@ -797,7 +843,41 @@ def _ask_download_helper() -> tuple:
         return bool(askUser(msg, title="Backdrop Video")), False
 
 
-def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
+_asking = set()  # the link the download question is showing (or about to show) for
+
+
+def _later(fn) -> None:
+    from aqt.qt import QTimer
+    QTimer.singleShot(400, fn)
+
+
+def _ask_later(url: str, quiet: bool) -> None:
+    """Ask about the helper once Anki has drawn the screen (this can come up while a page is being built, which a
+    question would freeze half-drawn), and one question at a time."""
+    if _asking:
+        return
+    _asking.add(url)
+
+    def ask():
+        _asking.discard(url)
+        if url not in active_urls() or live.ready(url) or url in _looking:
+            return
+        if os.path.exists(live.helper_path(ADDON_DIR)):
+            return go_live(url, quiet)  # downloaded meanwhile (from the settings window)
+        accepted, dont_show = _ask_download_helper(_helper_reason(url))
+        if dont_show:
+            save(suppress_ytdlp_prompt=True)
+        if not accepted:
+            _declined_urls.add(url)
+            if not quiet:
+                tooltip("No problem. " + NEED_HELPER, period=7000)
+            return
+        go_live(url, quiet=False, asked=True)
+
+    _later(ask)
+
+
+def go_live(url: str, quiet: bool = False, direct: bool = False, asked: bool = False) -> None:
     """Live streams and HLS/H.264 URLs convert via mpv (plus yt-dlp when extracting from a webpage)."""
     if url in _looking or live.ready(url):
         return
@@ -810,15 +890,14 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
             return
         if not os.path.exists(live.helper_path(ADDON_DIR)):
             if conf().get("suppress_ytdlp_prompt") or url in _declined_urls:
+                if not quiet:  # never a silent blank: say what it needs
+                    tooltip(("This video only plays on %s. " % _site(url) if url in _blocked else "This stream needs a helper. ")
+                            + NEED_HELPER, period=7000)
                 return
-            accepted, dont_show = _ask_download_helper()
-            if dont_show:
-                save(suppress_ytdlp_prompt=True)
-            if not accepted:
-                _declined_urls.add(url)
-                if not quiet:
-                    tooltip("You can download yt-dlp anytime in Tools → Backdrop Video…", period=7000)
+            if not asked:
+                _ask_later(url, quiet)
                 return
+            quiet = False  # they asked for it: say what happens next, and if it fails
     _looking.add(url)
     raw_quality = conf()["quality"]
     multi_fps = _fps_choice(conf())
@@ -827,7 +906,12 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
     quality = "360" if (raw_quality == "auto" and multi) else raw_quality
     cap_fps = raw_quality == "auto" or multi or multi_fps != "auto"
     if not quiet:
-        tooltip("Starting the live stream…")
+        if not use_direct and not os.path.exists(live.helper_path(ADDON_DIR)):
+            tooltip("Downloading the helper (3 MB), then starting…", period=6000)
+        elif url in _blocked:
+            tooltip(f"This video only plays on {_site(url)}, so Backdrop is loading it another way…", period=5000)
+        else:
+            tooltip("Starting the stream…")
 
     def task():
         if use_direct:
@@ -835,14 +919,20 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
             return live.register_direct(
                 url, quality, stream_count=stream_count, cap_fps=cap_fps, multi_fps=multi_fps, video=parsed_src
             )
-        live.download_helper(ADDON_DIR, if_missing=True)
+        try:
+            live.download_helper(ADDON_DIR, if_missing=True)
+        except Exception:
+            raise RuntimeError("no-download")
         try:
             return live.find(ADDON_DIR, url, quality, stream_count=stream_count, cap_fps=cap_fps, multi_fps=multi_fps)
         except Exception as e:
             # Sites change often and yt-dlp keeps up, so a day-old helper is updated once and retried.
             if str(e) in ("old-python", "no-mpv", "no-encoder") or time.time() - os.path.getmtime(live.helper_path(ADDON_DIR)) < 86400:
                 raise
-            live.download_helper(ADDON_DIR)
+            try:
+                live.download_helper(ADDON_DIR)
+            except Exception:
+                raise RuntimeError("no-download")
             return live.find(ADDON_DIR, url, quality, stream_count=stream_count, cap_fps=cap_fps, multi_fps=multi_fps)
 
     def done(fut):
@@ -850,20 +940,32 @@ def go_live(url: str, quiet: bool = False, direct: bool = False) -> None:
         try:
             title = fut.result()
         except Exception as e:
+            _not_live.add(url)  # not looked up again until the link is played again (no repeat tooltips)
             if direct:
-                _not_live.add(url)
-                tooltip("Anki can't play this video file's format. Try a YouTube link or a .webm file.", period=6000)
+                tooltip("This video file couldn't be played. Try the page it's on, or a YouTube link.", period=6000)
+                return
+            if str(e) == "no-download":  # always a download the user asked for (or an update): say why nothing plays
+                tooltip("Couldn't download the helper. Check your internet connection, then play the link again.", period=7000)
                 return
             if quiet:
-                _not_live.add(url)
+                if url in convert_links():  # it plays on YouTube again, or not at all: let YouTube's player try
+                    remember_convert(url, False)
+                    _not_live.discard(url)
+                    refresh()
+                elif _frame_checked.get(url):  # the site refuses to be shown in Anki and no video was found: say so
+                    tooltip(blocked_msg(url), period=6000)
                 return
             if str(e) == "no-encoder":
                 tooltip("This computer's mpv can't convert live streams for Anki.", period=6000)
             elif str(e) == "no-mpv":
                 tooltip("Live streams need mpv. Install it from mpv.io, then try again.", period=6000)
+            elif url in _blocked:
+                tooltip(blocked_msg(url), period=6000)
             else:
-                tooltip("Couldn't start this live stream. It may have ended, or the link may be wrong.", period=6000)
+                tooltip("Couldn't start this stream. It may be offline or ended, or the link may be wrong.", period=6000)
             return
+        if url in _blocked and source(url, 0)["kind"] == "youtube" and url not in convert_links():
+            remember_convert(url, True)
         c = conf()
         if c["on"] and url in active_urls(c):
             if title:
@@ -930,7 +1032,12 @@ def try_live(s: dict, prompt_if_missing: bool = False, only_url: str = None) -> 
     streams = s.get("streams") or ([{"url": conf()["url"], "kind": s.get("kind")}] if conf()["url"] else [])
     for slot in streams:
         url = slot.get("url")
-        if not url or (only_url and url != only_url) or slot.get("kind") != "page" or url in _not_live:
+        if not url or (only_url and url != only_url) or url in _not_live:
+            continue
+        if slot.get("convert"):
+            go_live(url, quiet=True)
+            continue
+        if slot.get("kind") != "page":
             continue
         parsed = urlparse(source(url, 0)["src"])
         if LIVE_MEDIA.search(parsed.path):
@@ -939,6 +1046,32 @@ def try_live(s: dict, prompt_if_missing: bool = False, only_url: str = None) -> 
         known = STREAM_SITES.search(parsed.hostname or "")
         if known or prompt_if_missing or os.path.exists(live.helper_path(ADDON_DIR)):
             go_live(url, quiet=not known)
+        if not known:
+            check_frame(url)
+
+
+def check_frame(url: str) -> None:
+    """Find out once, in the background, whether a site refuses to be shown inside Anki (a blank backdrop). If it
+    does, its video is loaded through the helper instead, and if that finds nothing the user is told why."""
+    if url in _frame_checked:
+        return
+    _frame_checked[url] = None  # being checked
+
+    def done(fut):
+        try:
+            refused = bool(fut.result())
+        except Exception:
+            refused = False
+        _frame_checked[url] = refused
+        if not refused or url not in active_urls() or live.ready(url) or url in _looking:
+            return  # fine as it is, or a lookup is running (it reports its own result)
+        _blocked.setdefault(url, time.time())
+        if url in _not_live:
+            tooltip(blocked_msg(url), period=6000)  # the helper already looked and found no video
+        else:
+            go_live(url)  # without the helper: offers it (or says how to get it)
+
+    mw.taskman.run_in_background(lambda: live.frame_refused(source(url, 0)["src"]), done)
 
 
 def _saved_links(c: dict) -> set:
@@ -1445,9 +1578,9 @@ class BackdropDialog(QDialog):
         has_helper = os.path.exists(live.helper_path(ADDON_DIR))
         self.helper_btn = QPushButton("yt-dlp Installed ✓ (Update)" if has_helper else "Download yt-dlp Helper (~3 MB)")
         self.helper_btn.setAutoDefault(False)
-        self.helper_btn.setToolTip("Free helper needed for Twitch, Kick, YouTube Live, and many webcams")
+        self.helper_btn.setToolTip("Free helper for Twitch, Kick, YouTube Live, webcams, and videos that only play on their own site")
         self.helper_btn.clicked.connect(self.download_helper)
-        helper_note = QLabel("Needed for Twitch, Kick, YouTube Live, and webcams. Regular YouTube videos work without it.")
+        helper_note = QLabel("Plays Twitch, Kick, YouTube Live, webcams, and videos that won't show inside Anki. Regular YouTube videos work without it.")
         helper_note.setWordWrap(True)
         helper_note.setStyleSheet("color: gray; font-size: 11px;")
 

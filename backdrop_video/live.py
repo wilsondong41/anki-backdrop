@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import zipimport
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,6 +69,34 @@ def download_helper(folder: str, if_missing: bool = False) -> None:
         for mod in [k for k in sys.modules if k == "yt_dlp" or k.startswith("yt_dlp.")]:
             sys.modules.pop(mod, None)
         zipimport._zip_directory_cache.pop(path, None)
+
+
+BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+
+def refuses_framing(headers) -> bool:
+    """Whether response headers forbid showing the page inside another page (Anki's backdrop is one)."""
+    xfo = (headers.get("X-Frame-Options") or "").strip().lower()
+    if xfo.startswith(("deny", "sameorigin", "allow-from")):
+        return True
+    for csp in headers.get_all("Content-Security-Policy") or []:
+        for rule in csp.split(";"):
+            words = rule.split()
+            if words and words[0].lower() == "frame-ancestors" and "*" not in words[1:]:
+                return True  # a list of allowed sites never includes Anki's local page
+    return False
+
+
+def frame_refused(url: str) -> bool:
+    """Ask the site once (headers only matter) whether it can be shown inside Anki. Unknown counts as allowed."""
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA, "Accept": "text/html,*/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return refuses_framing(r.headers)
+    except urllib.error.HTTPError as e:
+        return refuses_framing(e.headers)
+    except Exception:  # noqa: BLE001  offline, bad certificate, timeout: let the page try
+        return False
 
 
 def _ensure_mpv(quality: str = "auto") -> str:
@@ -470,6 +499,7 @@ def convert_cmd(video: str, audio, headers: dict = None, quality: str = "auto", 
     cmd = mpv() + ["--no-config", "--really-quiet", "--no-terminal", "--hwdec=auto-safe", video, "--o=-", "--of=webm"] + codecs(quality, max_fps=max_fps)
     if start and start > 0:
         cmd.append(f"--start=+{float(start):.1f}")  # a normal video restarted at a time (seeking); live streams ignore it
+        cmd.append("--hr-seek=no")  # from the nearest keyframe: ~1 s sooner on every screen change (measured)
     for k, v in (headers or {}).items():
         if not isinstance(k, str) or not isinstance(v, str) or "\n" in v or "\r" in v:
             continue
@@ -514,6 +544,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "video/webm")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")  # lets the backdrop keep a still frame between screens
         self.end_headers()
         read = getattr(proc.stdout, "read1", proc.stdout.read)
         try:
