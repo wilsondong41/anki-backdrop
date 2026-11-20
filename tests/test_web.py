@@ -146,7 +146,7 @@ lite_res = run_html(
       const shiftPeek = document.documentElement.classList.contains("bd-peek");
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "p", bubbles: true}));
       const peeking = document.documentElement.classList.contains("bd-peek");
-      const peekOp = getComputedStyle(document.getElementById("qa")).opacity;
+      const peekOp = getComputedStyle(document.body).opacity;  // the whole page fades, backdrop stays
       document.dispatchEvent(new KeyboardEvent("keyup", {key: "p", bubbles: true}));
       return {filter, bg, shiftPeek, cmds, peeking, peekOp, stillPeeking: document.documentElement.classList.contains("bd-peek")};
     })()""",
@@ -765,5 +765,62 @@ _rt_exec("""(() => { const c = Object.assign({}, window._cfg); backdrop.start(c)
 loop_f = QEventLoop(); QTimer.singleShot(200, loop_f.quit); loop_f.exec()
 focus_back = _rt_exec("document.activeElement && document.activeElement.tagName")
 assert focus_back != "IFRAME", focus_back
+
+# Per-stream volume (2+ streams), swap picker when 4 play, inline rename, and break: countdown, zoom, drag to swap.
+feat = _rt_exec("""(() => {
+  const vid = (n) => ({url: "https://albums.example/s" + n, kind: "video", src: "http://127.0.0.1:9/t/s" + n + ".webm", start: 0, live: true, vod: false, title: "S" + n});
+  const urls = [1, 2, 3, 4].map((n) => "https://albums.example/s" + n);
+  const c = Object.assign({}, window._cfg, {on: true, paused: false, held: [], muted: [], volume: 80, volumes: {"https://albums.example/s2": 50},
+    streams: [1, 2, 3, 4].map(vid), urls, url: urls[0],
+    recent: [{url: "https://other.example/x", title: "Other"}],
+    folders: [{name: "Cams", items: [{url: "https://other.example/y", title: "Y"}]}], break_info: {active: false}});
+  backdrop.start(c);
+  const ctl = document.querySelector("#bd-panel [data-tab=controls]"); ctl && ctl.click();
+  const vids = [...document.querySelectorAll("#bd-layer video")];
+  const sliders = document.querySelectorAll("#bd-panel .bd-slot-vol").length;
+  const vol2 = vids[1].volume;  // 80% x 50%
+  const sent = []; const old = window.pycmd; window.pycmd = (m) => sent.push(m);
+  // 4 playing: Recent shows a swap button, which asks which stream to replace.
+  const lib = document.querySelector("#bd-panel [data-tab=library]"); lib && lib.click();
+  const swapBtn = document.querySelector("#bd-panel [data-act='replace-pick'][data-save-url='https://other.example/x']");
+  swapBtn.click();
+  const ask = (document.querySelector("#bd-panel .bd-replace-ask span") || {}).textContent;
+  const replaceBtns = document.querySelectorAll("#bd-panel [data-act='replace-slot']").length;
+  document.querySelector("#bd-panel [data-act='replace-slot'][data-slot-url='https://albums.example/s3']").click();
+  // Rename a saved link inline.
+  lib && lib.click();
+  const pill = [...document.querySelectorAll("#bd-panel .bd-folder-pill")].find((p) => p.dataset.folderName === "Cams");
+  pill && pill.click();
+  document.querySelector("#bd-panel [data-act='rename-item']").click();
+  const inp = document.querySelector("#bd-panel .bd-rename-input");
+  inp.value = "Renamed";
+  inp.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+  // Break: countdown text, then zoom stream 2 and drag stream 1 onto stream 4.
+  backdrop.updateBreak({active: true, elapsed: 70, minutes: 5, left: 230});
+  const pillText = document.querySelector("#bd-break-pill .bd-break-text").textContent;
+  const hits = document.querySelectorAll("#bd-layer .bd-hit");
+  hits[1].click();
+  const zoomOk = document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && vids[1].parentElement.classList.contains("bd-zoom");
+  const othersStopped = !vids[0].getAttribute("src") && !vids[2].getAttribute("src") && vids[0].muted;
+  hits[1].click();
+  const unzoomed = !document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && !!vids[0].getAttribute("src");
+  const dt = new DataTransfer();
+  hits[0].dispatchEvent(new DragEvent("dragstart", {dataTransfer: dt, bubbles: true}));
+  hits[3].dispatchEvent(new DragEvent("drop", {dataTransfer: dt, bubbles: true, cancelable: true}));
+  backdrop.updateBreak({active: true, elapsed: 400, minutes: 5, left: 0});
+  const overText = document.querySelector("#bd-break-pill .bd-break-text").textContent;
+  backdrop.updateBreak({active: false});
+  const tilesGone = document.querySelectorAll("#bd-layer .bd-hit").length;
+  window.pycmd = old;
+  const sets = sent.filter((m) => m.startsWith("backdrop:set:")).map((m) => JSON.parse(m.slice(13)));
+  return {sliders, vol2, ask, replaceBtns, swap: sets.find((x) => x.replace), rename: sets.find((x) => x.rename_item),
+          pillText, zoomOk, othersStopped, unzoomed, order: (sets.find((x) => x.order) || {}).order, overText, tilesGone};
+})()""")
+assert feat == {"sliders": 4, "vol2": 0.4, "ask": "Replace which stream with “Other”?", "replaceBtns": 4,
+                "swap": {"replace": {"old": "https://albums.example/s3", "new": "https://other.example/x"}},
+                "rename": {"rename_item": {"folder": "Cams", "url": "https://other.example/y", "title": "Renamed"}},
+                "pillText": "Break · 3:50 left", "zoomOk": True, "othersStopped": True, "unzoomed": True,
+                "order": ["https://albums.example/s4", "https://albums.example/s2", "https://albums.example/s3", "https://albums.example/s1"],
+                "overText": "Break's over", "tilesGone": 0}, feat
 
 print("web ok")

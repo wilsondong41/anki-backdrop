@@ -185,26 +185,61 @@ ns["apply"]({"url": "https://example.com/off-recent.webm"})
 ns["apply"]({"on": False})
 ns["apply"]({"forget_recent": "https://example.com/off-recent.webm"})
 assert ns["conf"]()["url"] == "" and all(r["url"] != "https://example.com/off-recent.webm" for r in ns["conf"]()["recent"])
-# Break Zone moves review -> overview cleanly and restores on exit, exposing Pomodoro Bar or generic Pomodoro rest status.
-moves = []
+# Break Zone stays on the card screen (no page reload, so videos keep playing): the answer buttons hide,
+# Pomodoro Bar is paused and resumed directly, and the card's timer restarts when the break ends.
+moves, calls = [], []
 ns["mw"].state = "review"
 ns["mw"].moveToState = lambda s: (moves.append(s), setattr(ns["mw"], "state", s))
+bottom_web = types.SimpleNamespace(visible=True, setVisible=lambda v: setattr(bottom_web, "visible", v))
+card = types.SimpleNamespace(start_timer=lambda: calls.append("timer"))
+ns["mw"].reviewer = types.SimpleNamespace(bottom=types.SimpleNamespace(web=bottom_web), card=card)
 ns["refresh"] = lambda *a, **k: None
-fake_pb = types.ModuleType("pb_fake")
+fake_pb = types.ModuleType("239058710")
 fake_pb.__file__ = "/addons21/239058710/__init__.py"
 fake_pb._resting = True
 fake_pb._completed = False
 fake_pb._rest_duration_seconds = lambda: 300
 fake_pb._rest_elapsed = lambda: 60
-sys.modules["pb_fake"] = fake_pb
+fake_pb._pause_for_review_exit = lambda: calls.append("pomo-pause")
+fake_pb._on_state_did_change = lambda new, old: calls.append(f"pomo-{old}->{new}")
+sys.modules["239058710"] = fake_pb
 try:
     ns["on_js_message"]((False, None), "backdrop:break:1", None)
     binfo = ns["state"](False)["break_info"]
-    assert moves == ["overview"] and binfo["active"] and binfo["rest_left"] == 240, (moves, binfo)
+    assert moves == [] and binfo["active"] and binfo["rest_left"] == 240, (moves, binfo)
+    assert bottom_web.visible is False and calls == ["pomo-pause"], calls
     ns["on_js_message"]((False, None), "backdrop:break:0", None)
-    assert moves == ["overview", "review"] and not ns["state"](False)["break_info"]["active"], moves
+    assert moves == [] and not ns["state"](False)["break_info"]["active"]
+    assert bottom_web.visible is True and calls == ["pomo-pause", "timer", "pomo-overview->review"], calls
+    # Anki's auto advance is paused for the break (it would answer the hidden card) and comes back after.
+    rv = ns["mw"].reviewer
+    rv.auto_advance_enabled = True
+    rv._clear_auto_advance_timers = lambda: calls.append("aa-clear")
+    rv.auto_advance_if_enabled = lambda: calls.append("aa-resume")
+    calls.clear()
+    ns["on_js_message"]((False, None), "backdrop:break:1", None)
+    assert rv.auto_advance_enabled is False and "aa-clear" in calls, calls
+    ns["on_js_message"]((False, None), "backdrop:break:0", None)
+    assert rv.auto_advance_enabled is True and calls[-3:] == ["aa-resume", "timer", "pomo-overview->review"], calls
+    rv.auto_advance_enabled = False
+    # Leaving the screen during a break ends it and brings the buttons back.
+    ns["on_js_message"]((False, None), "backdrop:break:1", None)
+    ns["on_state_will_change"]("deckBrowser", "review")
+    assert bottom_web.visible is True and not ns["_break_mode"]
 finally:
-    sys.modules.pop("pb_fake", None)
+    sys.modules.pop("239058710", None)
+# A countdown break: pick 5/10/15/20/30 minutes (0 = count up); anything else is ignored.
+ns["mw"].state = "overview"
+ns["apply"]({"break_minutes": 10})
+ns["apply"]({"break_minutes": 7})
+ns["apply"]({"break_minutes": True})
+assert ns["conf"]()["break_minutes"] == 10
+ns["_quick"] = (0.0, None)
+ns["on_js_message"]((False, None), "backdrop:break:1", None)
+bi = ns["state"](False)["break_info"]
+assert bi["minutes"] == 10 and bi["left"] == 600, bi
+ns["on_js_message"]((False, None), "backdrop:break:0", None)
+ns["apply"]({"break_minutes": 0})
 generic_pb = types.ModuleType("pb_generic")
 generic_pb.__file__ = "/addons21/999999/__init__.py"
 generic_pb.is_resting = lambda: True
@@ -407,4 +442,43 @@ ns["remove_url"]("youtu.be/aaaaaaaaaa1")
 assert store["held"] == ["youtu.be/aaaaaaaaaa2"]
 ns["play_url"]("youtu.be/aaaaaaaaaa3")
 assert store["held"] == []
+# Swap one stream for another in the same spot; the others (and their mute/pause) stay.
+store.update(on=True, url="youtu.be/aaaaaaaaaa1", urls=["youtu.be/aaaaaaaaaa1", "youtu.be/aaaaaaaaaa2", "youtu.be/aaaaaaaaaa3"],
+             muted=["youtu.be/aaaaaaaaaa3"], held=["youtu.be/aaaaaaaaaa2"], recent=[])
+ns["apply"]({"replace": {"old": "youtu.be/aaaaaaaaaa2", "new": "youtu.be/bbbbbbbbbb1"}})
+assert store["urls"] == ["youtu.be/aaaaaaaaaa1", "youtu.be/bbbbbbbbbb1", "youtu.be/aaaaaaaaaa3"], store["urls"]
+assert store["muted"] == ["youtu.be/aaaaaaaaaa3"] and store["held"] == [] and store["recent"][0]["url"] == "youtu.be/bbbbbbbbbb1"
+ns["apply"]({"replace": {"old": "youtu.be/aaaaaaaaaa1", "new": "youtu.be/aaaaaaaaaa3"}})  # already playing: no change
+assert store["urls"][0] == "youtu.be/aaaaaaaaaa1"
+# Each stream's own volume: only playing links, clamped, remembered per link.
+ns["apply"]({"volumes": {"youtu.be/aaaaaaaaaa1": 140, "youtu.be/nope": 20, "youtu.be/aaaaaaaaaa3": "x"}})
+assert store["volumes"] == {"youtu.be/aaaaaaaaaa1": 100}, store["volumes"]
+ns["apply"]({"volumes": {"youtu.be/aaaaaaaaaa3": 35}})
+assert ns["state"](True)["volumes"] == {"youtu.be/aaaaaaaaaa1": 100, "youtu.be/aaaaaaaaaa3": 35}
+# Drag to reorder (in a break): only the same set of playing links, in a new order; the screen redraws in that order.
+_refreshes = []
+_real_refresh, ns["refresh"] = ns["refresh"], lambda *a, **k: _refreshes.append(1)
+ns["apply"]({"order": ["youtu.be/aaaaaaaaaa3", "youtu.be/aaaaaaaaaa1", "youtu.be/bbbbbbbbbb1"]})
+assert store["urls"] == ["youtu.be/aaaaaaaaaa3", "youtu.be/aaaaaaaaaa1", "youtu.be/bbbbbbbbbb1"] and store["url"] == "youtu.be/aaaaaaaaaa3"
+assert _refreshes, "a new order must redraw the screen"
+ns["refresh"] = _real_refresh
+ns["apply"]({"order": ["youtu.be/evil", "youtu.be/aaaaaaaaaa1", "youtu.be/bbbbbbbbbb1"]})
+assert store["urls"][0] == "youtu.be/aaaaaaaaaa3"
+ns["apply"]({"order": [1, "youtu.be/aaaaaaaaaa1", ["x"]]})  # junk from the page is ignored, not a crash
+assert store["urls"][0] == "youtu.be/aaaaaaaaaa3"
+store["volumes"] = ["not", "a", "dict"]  # hand-edited config
+assert ns["state"](True)["volumes"] == {}
+ns["apply"]({"volumes": {"youtu.be/aaaaaaaaaa3": 20}})
+assert store["volumes"] == {"youtu.be/aaaaaaaaaa3": 20}, store["volumes"]
+# Rename a saved link: the folder, Recent and Now Playing all show the new name.
+store.update(folders=[{"name": "Cams", "items": [{"url": "youtu.be/aaaaaaaaaa3", "title": "old"}]}],
+             recent=[{"url": "youtu.be/aaaaaaaaaa3", "title": "old"}])
+ns["apply"]({"rename_item": {"folder": "cams", "url": "youtu.be/aaaaaaaaaa3", "title": "  My   stream "}})
+assert store["folders"][0]["items"][0]["title"] == "My stream" and store["recent"][0]["title"] == "My stream" and store["title"] == "My stream"
+assert ns["rename_saved"]("Cams", "youtu.be/missing", "x") is False and ns["rename_saved"]("Cams", "youtu.be/aaaaaaaaaa3", "  ") is False
+# Your own quick links: only web addresses with a name, at most 6.
+store["quick_links"] = [{"label": "Mine", "url": "https://example.com/x"}, {"label": "Bad", "url": "javascript:alert(1)"},
+                        {"label": "", "url": "https://example.com/y"}] + [{"label": f"L{i}", "url": f"https://e{i}.com"} for i in range(9)]
+q = ns["quick_links"]()
+assert q[0] == {"label": "Mine", "url": "https://example.com/x"} and len(q) == 6 and all(x["url"].startswith("https://") for x in q)
 print("ok")

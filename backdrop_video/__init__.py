@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import time
 from urllib.parse import parse_qs, quote_plus, urlparse
@@ -30,7 +31,7 @@ MAX_FOLDER_ITEMS = 50
 DEFAULTS = {"url": "", "urls": [], "muted": [], "on": False, "strength": 30, "plate_opacity": 70,
             "true_transparency": False, "volume": 50, "time": 0, "paused": False, "picture": True,
             "panel": False, "quality": "auto", "multi_fps": "auto", "suppress_ytdlp_prompt": False,
-            "title": "", "recent": [], "folders": [], "album_pos": {}, "held": []}
+            "title": "", "recent": [], "folders": [], "album_pos": {}, "held": [], "volumes": {}, "quick_links": [], "break_minutes": 0, "stay_signed_in": False}
 QUALITIES = [("Auto", "auto"), ("360p", "360"), ("480p", "480"), ("720p", "720"), ("1080p", "1080"), ("1440p", "1440"), ("4K", "2160")]
 VALID_QUALITIES = {v for _, v in QUALITIES}
 # Frame rate for converted streams ("0" = the source's own rate). Lower saves CPU and battery; the picture is blurred anyway.
@@ -106,6 +107,66 @@ def save(**changes) -> None:
     c.update(changes)
     mw.addonManager.writeConfig(__name__, c)
     _quick = (0.0, None)
+
+
+_signin_profile = None
+
+
+def _signin_dir() -> str:
+    # Anki's main folder, beside (not inside) your profile and add-on folders, which Loadout copies between
+    # computers; AnkiWeb never sees it either.
+    return os.path.join(mw.pm.base, "backdrop_browser")
+
+
+def _browse_profile():
+    """With "Stay signed in" on: one browser profile for the Browse window whose logins are kept on this computer."""
+    global _signin_profile
+    if not conf().get("stay_signed_in"):
+        return None
+    if _signin_profile is None:
+        from PyQt6.QtWebEngineCore import QWebEngineProfile
+        path = _signin_dir()
+        os.makedirs(path, exist_ok=True)
+        prof = QWebEngineProfile("backdrop-browse", mw)
+        prof.setPersistentStoragePath(path)
+        prof.setCachePath(os.path.join(path, "cache"))
+        # Keep the site's login cookie even when the site meant it for one visit only.
+        prof.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+        _signin_profile = prof
+    return _signin_profile
+
+
+def forget_logins() -> None:
+    """Sign out of every site in the Browse window and delete what it kept."""
+    if _signin_profile is not None:
+        try:
+            _signin_profile.cookieStore().deleteAllCookies()
+            _signin_profile.clearHttpCache()
+            _signin_profile.clearAllVisitedLinks()
+        except Exception:
+            pass
+    shutil.rmtree(_signin_dir(), ignore_errors=True)
+    # The browser engine finishes some writes a moment later, so delete again then (and at every start while it's off).
+    from aqt.qt import QTimer
+    QTimer.singleShot(3000, lambda: conf().get("stay_signed_in") or shutil.rmtree(_signin_dir(), ignore_errors=True))
+
+
+def on_profile_did_open() -> None:
+    if not conf().get("stay_signed_in"):
+        shutil.rmtree(_signin_dir(), ignore_errors=True)
+
+
+MAX_QUICK = 6  # your own quick links in the Browse window
+
+
+def quick_links() -> list:
+    """Your own quick links ({label, url}), checked: the saved config can be edited by hand."""
+    out = []
+    for q in conf().get("quick_links") or []:
+        if (isinstance(q, dict) and isinstance(q.get("url"), str) and q["url"].lower().startswith(("http://", "https://"))
+                and isinstance(q.get("label"), str) and q["label"].strip()):
+            out.append({"label": q["label"].strip()[:40], "url": q["url"][:2000]})
+    return out[:MAX_QUICK]
 
 
 def source(url: str, start: int, paused: bool = False) -> dict:
@@ -307,6 +368,25 @@ def save_to_folder(folder_name: str, url: str, title: str = "") -> bool:
     return True
 
 
+def rename_saved(folder_name: str, url: str, title: str) -> bool:
+    """Give a saved link your own name; the same link in Recent and Now Playing shows it too."""
+    folder_name = (folder_name or "").strip() if isinstance(folder_name, str) else ""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    title = " ".join(title.split())[:120] if isinstance(title, str) else ""
+    if not folder_name or not url or not title:
+        return False
+    c = conf()
+    folders = _sanitize_folders(c.get("folders"))
+    f = next((f for f in folders if f["name"].lower() == folder_name.lower()), None)
+    it = next((it for it in f["items"] if it["url"] == url), None) if f else None
+    if it is None:
+        return False
+    it["title"] = title
+    recent = [{**r, "title": title} if r.get("url") == url else r for r in c.get("recent") or []]
+    save(folders=folders, recent=recent, **({"title": title} if c.get("url") == url else {}))
+    return True
+
+
 def remove_from_folder(folder_name: str, url: str) -> bool:
     folder_name = (folder_name or "").strip() if isinstance(folder_name, str) else ""
     url = (url or "").strip() if isinstance(url, str) else ""
@@ -397,15 +477,68 @@ def _pomodoro_state() -> dict:
     return {}
 
 
+BREAK_MINUTES = (0, 5, 10, 15, 20, 30)  # 0 = count up
+
+
 def _break_info() -> dict:
     if not _break_mode:
         return {"active": False}
-    info = {"active": True, "elapsed": max(0, int(time.monotonic() - _break_started))}
+    minutes = quick_conf().get("break_minutes")
+    minutes = minutes if minutes in BREAK_MINUTES else 0
+    info = {"active": True, "elapsed": max(0, int(time.monotonic() - _break_started)), "minutes": minutes}
+    if minutes:
+        info["left"] = max(0, minutes * 60 - info["elapsed"])
     try:
         info.update(_pomodoro_state())
     except Exception:
         pass
     return info
+
+
+def _pomodoro_bar():
+    """Pomodoro Bar (239058710), if installed: told directly about a break, since the card screen stays open."""
+    mod = sys.modules.get("239058710")
+    return mod if mod is not None and hasattr(mod, "_pause_for_review_exit") and hasattr(mod, "_on_state_did_change") else None
+
+
+_auto_advance_paused = False
+
+
+def _review_chrome(break_on: bool) -> None:
+    """During a break on the card screen: hide the answer buttons and pause Pomodoro Bar; after it, bring them
+    back, restart the card's timer (the break isn't counted as answer time) and resume Pomodoro Bar."""
+    bottom = getattr(getattr(mw, "reviewer", None), "bottom", None)
+    web = getattr(bottom, "web", None)
+    try:
+        web.setVisible(not break_on) if web is not None else None
+    except Exception:
+        pass
+    global _auto_advance_paused
+    rv = getattr(mw, "reviewer", None)
+    try:  # Anki's auto advance would answer the hidden card mid-break
+        if break_on and getattr(rv, "auto_advance_enabled", False):
+            rv.auto_advance_enabled = False
+            rv._clear_auto_advance_timers()
+            _auto_advance_paused = True
+        elif not break_on and _auto_advance_paused:
+            _auto_advance_paused = False
+            rv.auto_advance_enabled = True
+            rv.auto_advance_if_enabled()
+    except Exception:
+        _auto_advance_paused = False
+    pomo = _pomodoro_bar()
+    try:
+        if break_on:
+            if pomo:
+                pomo._pause_for_review_exit()
+        else:
+            card = getattr(rv, "card", None)
+            if card is not None and hasattr(card, "start_timer"):
+                card.start_timer()
+            if pomo:
+                pomo._on_state_did_change("review", "overview")
+    except Exception:
+        pass
 
 
 def _stop_break_timer() -> None:
@@ -439,10 +572,10 @@ def enter_break() -> None:
         _break_timer.start()
     except Exception:
         pass
-    if mw.state == "review" and hasattr(mw, "moveToState"):
-        mw.moveToState("overview")
-    else:
-        refresh()
+    # The card screen stays open (no page reload, so the videos keep playing); the card and its buttons hide.
+    if _break_from_review:
+        _review_chrome(True)
+    refresh()
 
 
 def exit_break() -> None:
@@ -451,10 +584,9 @@ def exit_break() -> None:
     _break_mode = False
     _break_from_review = False
     _stop_break_timer()
-    if was_review and mw.state == "overview" and hasattr(mw, "moveToState"):
-        mw.moveToState("review")
-    else:
-        refresh()
+    if was_review and mw.state == "review":
+        _review_chrome(False)
+    refresh()
 
 
 def state(plate: bool) -> dict:
@@ -465,6 +597,8 @@ def state(plate: bool) -> dict:
     s["urls"] = urls
     s["muted"] = [u for u in (c.get("muted") or []) if isinstance(u, str) and u in urls]
     s["held"] = [u for u in (c.get("held") or []) if isinstance(u, str) and u in urls]  # videos paused on their own
+    vols = c.get("volumes") if isinstance(c.get("volumes"), dict) else {}
+    s["volumes"] = {u: v for u, v in vols.items() if u in urls and isinstance(v, int) and 0 <= v <= 100}  # each stream's own level
     s["break_info"] = _break_info()
     s["fps"] = _fps_choice(c)
     s["live_status"] = {u: st for u in _saved_links(c) if (st := live.cached_status(u))}
@@ -921,6 +1055,35 @@ def add_url(url: str) -> bool:
     return True
 
 
+def replace_url(old: str, new: str) -> bool:
+    """Swap one playing stream for another link, in the same spot; the others keep playing."""
+    global position
+    old = old.strip() if isinstance(old, str) else ""
+    new = new.strip() if isinstance(new, str) else ""
+    if not new or len(new) > 2000:
+        return False
+    c = conf()
+    cur = active_urls(c) if c["on"] else []
+    if old not in cur:
+        play_url(new)
+        return True
+    if new in cur:
+        return False
+    for u in (old, new):
+        live.forget(u)
+        _positions.pop(u, None)
+    _not_live.discard(new)
+    _declined_urls.discard(new)
+    new_urls = [new if u == old else u for u in cur]
+    keep = lambda key: [u for u in (c.get(key) or []) if u in new_urls and u != new]
+    recent = _remember_recent(c, new)
+    if old == c["url"]:
+        position = 0.0
+    save(url=new_urls[0], urls=new_urls, muted=keep("muted"), held=keep("held"), on=True, paused=False, recent=recent,
+         title=_recent_title({**c, "recent": recent}, new_urls[0]))
+    return True
+
+
 def remove_url(url: str) -> None:
     """Remove one active backdrop slot (or turn off & clear if it was the last one)."""
     global position
@@ -992,6 +1155,7 @@ def set_quality(quality: str) -> None:
 
 def apply(changes: dict) -> None:
     """Changes sent by the quick-controls panel; the page is untrusted, so each value is checked."""
+    global position
     if not isinstance(changes, dict):
         return
     raw_url = changes.get("url")
@@ -1007,6 +1171,10 @@ def apply(changes: dict) -> None:
     if added_url:
         if not add_url(added_url):
             added_url = ""
+    swap = changes.get("replace")
+    if isinstance(swap, dict) and isinstance(swap.get("old"), str) and isinstance(swap.get("new"), str):
+        if replace_url(swap["old"], swap["new"]):
+            added_url = swap["new"].strip()  # looked up like an added link
     raw_rem = changes.get("remove_url")
     removed_url = raw_rem.strip() if isinstance(raw_rem, str) and raw_rem.strip() else ""
     if removed_url:
@@ -1030,6 +1198,11 @@ def apply(changes: dict) -> None:
         folder_changed = save_to_folder(
             save_item.get("folder", ""), save_item.get("url", ""), save_item.get("title", "")
         ) or folder_changed
+    rename_item = changes.get("rename_item")
+    if isinstance(rename_item, dict):
+        folder_changed = rename_saved(
+            rename_item.get("folder", ""), rename_item.get("url", ""), rename_item.get("title", "")
+        ) or folder_changed
     unsave_item = changes.get("unsave_item")
     if isinstance(unsave_item, dict):
         folder_changed = remove_from_folder(
@@ -1046,6 +1219,26 @@ def apply(changes: dict) -> None:
     if isinstance(changes.get("muted"), list):
         active = set(active_urls())
         extra["muted"] = [u for u in changes["muted"] if isinstance(u, str) and u in active][:MAX_STREAMS]
+    if isinstance(changes.get("volumes"), dict):
+        # Remembered per link (a stream you keep quieter stays quieter); only playing links can be set.
+        active = set(active_urls())
+        got = {u: max(0, min(100, int(v))) for u, v in changes["volumes"].items()
+               if isinstance(u, str) and u in active and isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)}
+        if got:
+            old = conf().get("volumes") if isinstance(conf().get("volumes"), dict) else {}
+            kept = {u: v for u, v in old.items() if u not in got and isinstance(u, str)}
+            extra["volumes"] = dict(list({**kept, **got}.items())[-50:])  # the 50 most recently set
+    if changes.get("break_minutes") in BREAK_MINUTES and not isinstance(changes.get("break_minutes"), bool):
+        extra["break_minutes"] = changes["break_minutes"]
+    order = changes.get("order")
+    if isinstance(order, list):
+        cur = active_urls()
+        if (all(isinstance(u, str) for u in order) and len(order) == len(cur) and sorted(order) == sorted(cur)
+                and order != cur):  # same streams, new order
+            c0 = conf()
+            extra.update(urls=order, url=order[0], title=_recent_title(c0, order[0]))
+            if order[0] != c0["url"]:
+                position = float(_positions.get(order[0], 0.0))
     if isinstance(changes.get("held"), list):
         active = set(active_urls())
         extra["held"] = [u for u in changes["held"] if isinstance(u, str) and u in active][:MAX_STREAMS]
@@ -1055,7 +1248,7 @@ def apply(changes: dict) -> None:
         _dialog.true_transparency.setChecked(flags["true_transparency"])
         _dialog.true_transparency.blockSignals(False)
     target_new = url or added_url
-    if target_new or played_multi or removed_url or forgot_recent or folder_changed or "on" in flags:
+    if target_new or played_multi or removed_url or forgot_recent or folder_changed or "on" in flags or "urls" in extra:
         refresh(ask_live=bool(target_new or played_multi), only_url=None if played_multi else (target_new or None))
     quality = changes.get("quality")
     if isinstance(quality, str) and quality in VALID_QUALITIES:
@@ -1096,13 +1289,20 @@ def on_state_will_change(new_state: str, old_state: str) -> None:
         save_position()
         if getattr(mw, "web", None):
             mw.web.eval("window.backdrop && backdrop.peek(false)")
-    if _break_mode and not (old_state == "review" and new_state == "overview"):
+    if _break_mode:  # leaving the screen ends the break
+        if _break_from_review:
+            _review_chrome(False)
         _break_mode = False
         _break_from_review = False
         _stop_break_timer()
 
 
 def on_profile_will_close() -> None:
+    if _browse is not None:  # its pages must go before the signed-in browser profile does
+        try:
+            _browse.reject()
+        except Exception:
+            pass
     _stop_break_timer()
     save_position()
     live.stop_all()
@@ -1192,7 +1392,10 @@ class BackdropDialog(QDialog):
         self.add_sel_btn = QPushButton("+ Add")
         self.move_btn = QPushButton("Move to…")
         self.rem_btn = QPushButton("Remove")
-        for b in (self.play_sel_btn, self.add_sel_btn, self.move_btn, self.rem_btn):
+        self.ren_item_btn = QPushButton("Rename")
+        self.ren_item_btn.setToolTip("Give the selected saved link your own name")
+        self.ren_item_btn.clicked.connect(self._rename_item_prompt)
+        for b in (self.play_sel_btn, self.add_sel_btn, self.move_btn, self.ren_item_btn, self.rem_btn):
             b.setAutoDefault(False)
         self.play_sel_btn.setToolTip("Play up to 4 selected saved videos together in multi-view")
         self.add_sel_btn.setToolTip("Add selected saved video(s) alongside what is currently playing")
@@ -1204,6 +1407,7 @@ class BackdropDialog(QDialog):
         item_bar.addWidget(self.add_sel_btn)
         item_bar.addStretch()
         item_bar.addWidget(self.move_btn)
+        item_bar.addWidget(self.ren_item_btn)
         item_bar.addWidget(self.rem_btn)
         lib_lay.addLayout(item_bar)
 
@@ -1397,6 +1601,7 @@ class BackdropDialog(QDialog):
         self.add_sel_btn.setEnabled(bool(sel))
         self.move_btn.setEnabled(bool(sel) and len(folders) >= 2)
         self.rem_btn.setEnabled(bool(sel))
+        self.ren_item_btn.setEnabled(len(sel) == 1)
 
     def _create_folder_prompt(self) -> None:
         from aqt.qt import QInputDialog
@@ -1478,6 +1683,18 @@ class BackdropDialog(QDialog):
         moved = any(move_folder_item(src, dst, u) for u in urls)
         if moved:
             self.sync_from_config(select_folder=src)
+            refresh()
+
+    def _rename_item_prompt(self) -> None:
+        from aqt.qt import QInputDialog
+        fname, urls = self._current_folder_name(), self._selected_urls()
+        if not fname or len(urls) != 1:
+            return
+        f = next((f for f in _sanitize_folders(conf().get("folders")) if f["name"] == fname), None)
+        old = next((it.get("title") or "" for it in (f or {}).get("items", []) if it["url"] == urls[0]), "")
+        name, ok = QInputDialog.getText(self, "Rename Saved Link", "Name:", text=old or urls[0])
+        if ok and rename_saved(fname, urls[0], name):
+            self.sync_from_config(select_folder=fname)
             refresh()
 
     def remove_selected(self) -> None:
@@ -1576,6 +1793,12 @@ def open_browse() -> None:
         return (t[:22] + "…") if len(t) > 23 else t
 
     class _BrowseView(QWebEngineView):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            prof = _browse_profile()
+            if prof is not None:
+                self.setPage(QWebEnginePage(prof, self))
+
         def createWindow(self, win_type):
             if win_type == QWebEnginePage.WebWindowType.WebBrowserBackgroundTab:
                 return open_tab(None, switch=False)
@@ -1648,17 +1871,98 @@ def open_browse() -> None:
 
     sites_bar = QHBoxLayout()
     sites_bar.addWidget(QLabel("Quick jump:"))
-    for label, site_url in (
-        ("YouTube", "https://www.youtube.com"),
-        ("Twitch", "https://www.twitch.tv"),
-        ("Kick", "https://kick.com"),
-        ("Google", "https://www.google.com"),
-    ):
-        btn = QPushButton(label)
-        btn.setAutoDefault(False)
-        btn.clicked.connect(lambda _c=False, u=site_url: current_view() and current_view().setUrl(QUrl(u)))
-        sites_bar.addWidget(btn)
+    quick_box = QHBoxLayout()
+    sites_bar.addLayout(quick_box)
+
+    def jump(u: str) -> None:
+        if current_view():
+            current_view().setUrl(QUrl(u))
+
+    def edit_quick(i: int, action: str) -> None:
+        links = quick_links()
+        if not 0 <= i < len(links):
+            return
+        if action == "remove":
+            del links[i]
+        else:
+            name, ok = QInputDialog.getText(dlg, "Rename Quick Link", "Name:", text=links[i]["label"])
+            if not ok or not name.strip():
+                return
+            links[i]["label"] = name.strip()[:40]
+        save(quick_links=links)
+        build_quick()
+
+    def add_quick() -> None:
+        v = current_view()
+        u = v.url().toString() if v else ""
+        if not u.lower().startswith(("http://", "https://")):
+            tooltip("Open a website first, then add it as a quick link.", period=4000)
+            return
+        guess = (v.title() or urlparse(u).hostname or "Site").strip()[:40]
+        name, ok = QInputDialog.getText(dlg, "Add Quick Link", f"Name for {urlparse(u).hostname}:", text=guess)
+        if not ok or not name.strip():
+            return
+        links = [q for q in quick_links() if q["url"] != u] + [{"label": name.strip()[:40], "url": u}]
+        save(quick_links=links[-MAX_QUICK:])
+        build_quick()
+
+    def build_quick() -> None:
+        while quick_box.count():
+            w = quick_box.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        for label, site_url in (("YouTube", "https://www.youtube.com"), ("Twitch", "https://www.twitch.tv"),
+                                ("Google", "https://www.google.com")):
+            btn = QPushButton(label)
+            btn.setAutoDefault(False)
+            btn.clicked.connect(lambda _c=False, u=site_url: jump(u))
+            quick_box.addWidget(btn)
+        for i, q in enumerate(quick_links()):
+            btn = QPushButton(q["label"])
+            btn.setAutoDefault(False)
+            btn.setToolTip(q["url"] + "\nRight-click to rename or remove")
+            btn.clicked.connect(lambda _c=False, u=q["url"]: jump(u))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+            def menu(pos, i=i, b=btn):
+                m = QMenu(b)
+                m.addAction("Rename…", lambda: edit_quick(i, "rename"))
+                m.addAction("Remove", lambda: edit_quick(i, "remove"))
+                m.exec(b.mapToGlobal(pos))
+            btn.customContextMenuRequested.connect(menu)
+            quick_box.addWidget(btn)
+        if len(quick_links()) < MAX_QUICK:
+            plus = QPushButton("+")
+            plus.setFixedWidth(28)
+            plus.setAutoDefault(False)
+            plus.setToolTip("Add the page you're on as a quick link")
+            plus.clicked.connect(add_quick)
+            quick_box.addWidget(plus)
+
+    build_quick()
     sites_bar.addStretch()
+    stay_cb = QCheckBox("Stay signed in")
+    stay_cb.setChecked(bool(conf().get("stay_signed_in")))
+    stay_cb.setToolTip(
+        "Keep your logins in this window after Anki closes.\n"
+        "Kept only on this computer, in Anki's folder (not synced, never uploaded).\n"
+        "Passwords aren't saved, only each site's 'keep me logged in' cookie.\n"
+        "Anyone who uses your computer account could use these logins.")
+
+    def on_stay(on: bool) -> None:
+        save(stay_signed_in=bool(on))
+        if not on and askUser("Also sign out of all sites and delete the saved logins?", parent=dlg):
+            forget_logins()
+        v = current_view()
+        u = v.url().toString() if v else ""
+        if u.startswith(("http://", "https://")):  # reopen this page so the change applies right away
+            old = tabs.currentIndex()
+            open_tab(u, switch=True)
+            close_tab(old)
+        tooltip("You'll stay signed in to sites you log in to here." if on else "Logins in this window are forgotten when Anki closes.", period=4000)
+
+    stay_cb.toggled.connect(on_stay)
+    sites_bar.addWidget(stay_cb)
     nt_top = QPushButton("+ New Tab")
     nt_top.setAutoDefault(False)
     nt_top.clicked.connect(lambda: open_tab(_new_tab_url(), switch=True))
@@ -1684,7 +1988,7 @@ def open_browse() -> None:
     status_lbl = QLabel()
     replace_b = QPushButton("Replace Current")
     replace_b.setAutoDefault(False)
-    replace_b.setToolTip("Stop current stream(s) and play only this page")
+    replace_b.setToolTip("Swap one playing stream for this page (or replace them all)")
     save_b = QPushButton("★ Save…")
     save_b.setAutoDefault(False)
     save_b.setToolTip("Save this page to a folder without changing what is playing")
@@ -1827,7 +2131,34 @@ def open_browse() -> None:
     addr.returnPressed.connect(go)
     go_b.clicked.connect(go)
     play_b.clicked.connect(lambda: pick(True))
-    replace_b.clicked.connect(lambda: pick(True))
+    def replace_menu() -> None:
+        c = conf()
+        cur = active_urls(c) if c["on"] else []
+        if len(cur) < 2:
+            pick(True)
+            return
+        m = QMenu(replace_b)
+        for u in cur:
+            name = _recent_title(c, u) or (urlparse(u).hostname or u)
+            m.addAction(f"Replace “{name[:50]}”", lambda u=u: pick_replace(u))
+        m.addSeparator()
+        m.addAction("Replace all (play only this page)", lambda: pick(True))
+        m.exec(replace_b.mapToGlobal(replace_b.rect().topLeft()))
+
+    def pick_replace(old: str) -> None:
+        v = current_view()
+        url, _ = _current_page_info()
+        if not v or not url:
+            return
+        _silence_view(v)
+        if replace_url(old, url):
+            refresh(ask_live=True, only_url=url)
+            sync_buttons()
+            tooltip("Swapped in this page; the other streams keep playing.", period=3000)
+        else:
+            tooltip("This page is already playing.", period=3000)
+
+    replace_b.clicked.connect(replace_menu)
     add_b.clicked.connect(lambda: pick(False))
     save_b.clicked.connect(open_save_menu)
 
@@ -1856,6 +2187,7 @@ def open_browse() -> None:
     dlg._save_btn = save_b
     dlg._add_btn = add_b
     dlg._replace_btn = replace_b
+    dlg._pick_replace = pick_replace
     dlg._play_btn = play_b
     dlg._save_current_to = save_current_to
     open_tab(_browse_start_url(), switch=True)
@@ -1891,12 +2223,25 @@ BRIDGE_JS = r"""
       v.currentTime = Math.max(0, Math.min(v.duration - 1, m.t));
     }
     if (m.bdBridge === "pause") v.pause();  // the website keeps showing that frame
+    if (m.bdBridge === "volume" && isFinite(m.v)) { v.volume = Math.max(0, Math.min(1, m.v)); v.muted = m.v === 0; }
     if (m.bdBridge === "play") v.play().catch(() => {});
     try {
       window.top.postMessage({ bdBridge: "status", time: v.currentTime || 0,
         duration: isFinite(v.duration) ? v.duration : 0, live: v.duration === Infinity }, "*");
     } catch (_) {}
   });
+  // Hold P while this website has the keyboard (it focused itself): the card page can't see keys typed here, so pass
+  // them up. A real text box keeps its P (Anki itself already stops P from reaching a website's text box).
+  const isP = (e) => e.code === "KeyP" || e.key === "p" || e.key === "P";
+  const typing = () => { const a = document.activeElement; return !!(a && a.closest && a.closest("input, textarea, select, [contenteditable]")); };
+  const peekKey = (on) => (e) => {
+    if (!isP(e) || typing() || (on && (e.repeat || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try { window.top.postMessage({ bdBridge: "peek", on: on }, "*"); } catch (_) {}
+  };
+  window.addEventListener("keydown", peekKey(true), true);
+  window.addEventListener("keyup", peekKey(false), true);
 })();
 """
 
@@ -1959,6 +2304,19 @@ def _install_peek_filter() -> None:
                 self._peeking = False
                 mw.web.eval("window.backdrop && backdrop.peek(false)")
                 return False
+            if (t in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) and _break_mode and mw.state == "review"
+                    and not self._is_p(event)):
+                # A break on the card screen: Space, 1–4 and the other card keys (Anki's shortcuts, hence
+                # ShortcutOverride) mustn't act on the hidden card. Esc ends the break; Ctrl/Cmd/Alt shortcuts still work.
+                mods = event.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier)
+                fw = mw.app.focusWidget()
+                typing = isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)) or (
+                    self._in_widget(fw, mw.web) and _web_focus == "typing")
+                if not mods and mw.app.activeWindow() is mw and not typing:
+                    if t == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not event.isAutoRepeat():
+                        exit_break()
+                    event.accept()
+                    return True
             if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) or not self._is_p(event):
                 return False
             in_web = self._in_widget(mw.app.focusWidget(), mw.web)
@@ -2010,6 +2368,7 @@ gui_hooks.reviewer_did_show_question.append(lambda _card: allow_autoplay())
 gui_hooks.webview_did_receive_js_message.append(on_js_message)
 gui_hooks.state_will_change.append(on_state_will_change)
 gui_hooks.profile_will_close.append(on_profile_will_close)
+gui_hooks.profile_did_open.append(on_profile_did_open)
 if hasattr(mw, "app") and hasattr(mw.app, "aboutToQuit"):
     mw.app.aboutToQuit.connect(live.stop_all)
 gui_hooks.av_player_will_play.append(lambda _tag: duck(True))

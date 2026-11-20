@@ -71,4 +71,45 @@ b.open_browse()
 assert b._browse._tabs.widget(0).url().toString() == "https://www.twitch.tv/"
 b._browse.close(); app.processEvents()
 assert b._browse is None
+# Quick links: no Kick; your own links show with a "+" to add the current page. "Stay signed in" keeps logins in
+# Anki's main folder (outside the add-on and profile folders that Loadout copies), and forgetting deletes them.
+import os, tempfile, shutil as _sh
+from PyQt6.QtWidgets import QPushButton as _QPB, QCheckBox as _QCB
+base = tempfile.mkdtemp(prefix="bd-base-")
+mw.pm = types.SimpleNamespace(base=base)
+cfg.update(quick_links=[{"label": "My Site", "url": "https://example.com/"}], stay_signed_in=False, on=False)
+b.open_browse()
+texts = [w.text() for w in b._browse.findChildren(_QPB)]
+assert "Kick" not in texts and "My Site" in texts and "+" in texts and "YouTube" in texts, texts
+stay = [w for w in b._browse.findChildren(_QCB) if w.text() == "Stay signed in"][0]
+assert not stay.isChecked() and b._browse._tabs.widget(0).page().profile().isOffTheRecord()
+stay.setChecked(True)  # applies to new tabs (and the page you're on)
+b._browse._open_tab("https://example.com/a", switch=True)
+prof = b._browse._tabs.currentWidget().page().profile()
+assert cfg["stay_signed_in"] is True and not prof.isOffTheRecord() and prof.persistentStoragePath().startswith(base), prof.persistentStoragePath()
+assert os.path.isdir(os.path.join(base, "backdrop_browser"))
+b._browse.close(); app.processEvents()
+cfg.update(stay_signed_in=False)
+b.forget_logins()
+import time as _t
+end = _t.time() + 5
+while _t.time() < end: app.processEvents(); _t.sleep(0.05)
+assert not os.path.exists(os.path.join(base, "backdrop_browser"))
+os.makedirs(os.path.join(base, "backdrop_browser")); b.on_profile_did_open()  # leftovers go at the next start
+assert not os.path.exists(os.path.join(base, "backdrop_browser"))
+# Replace one stream of several: the page you're on takes that one's place, the others keep playing.
+A, B, C = "https://example.com/a1", "https://example.com/b2", "https://example.com/c3"
+cfg.update(on=True, url=A, urls=[A, B], muted=[B])
+b.open_browse()
+b._browse._open_tab(C, switch=True)
+b._browse._tabs.currentWidget().setUrl(__import__("PyQt6.QtCore", fromlist=["QUrl"]).QUrl(C))
+end = _t.time() + 3
+while _t.time() < end and b._browse._tabs.currentWidget().url().toString() != C: app.processEvents(); _t.sleep(0.05)
+_real_refresh, b.refresh = b.refresh, (lambda *a, **k: None)  # no live-stream helper in this test
+b._browse._pick_replace(A)
+b.refresh = _real_refresh
+assert cfg["urls"] == [C, B] and cfg["muted"] == [B], (cfg["urls"], cfg["muted"])
+b._browse.close(); app.processEvents()
+cfg.update(stay_signed_in=False, on=False)
+_sh.rmtree(base, ignore_errors=True)
 print("dialog ok", aqt.qt.QT_VERSION_STR if hasattr(aqt.qt, "QT_VERSION_STR") else "")

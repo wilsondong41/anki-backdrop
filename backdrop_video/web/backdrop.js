@@ -4,6 +4,29 @@ window.backdrop = (() => {
   const root = document.documentElement;
   let cfg = null, layer = null, slots = [], time = 0, duration = 0, seeking = false, timer = null, fpsTimer = null, panel = null, breakPill = null;
   let openFolder = null, selectMode = false, savingItem = null, addingFolder = false, confirmDeleteFolder = null, activeTab = null;
+  let renaming = null;  // {folder, url} of the saved link being renamed in the panel
+  let replacing = null;  // {url, title}: 4 streams playing, picking which one this link replaces
+
+  // "+" plays a link alongside; with 4 already playing, "⇄" asks which one to swap out.
+  function addOrSwapButton(row, url, title) {
+    if (!cfg.on || slots.some((s) => s.url === url)) return;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bd-recent-del";
+    b.dataset.saveUrl = url;
+    b.dataset.saveTitle = title || "";
+    if (slots.length < 4) {
+      b.dataset.act = "add-saved";
+      b.title = "Play alongside what's playing";
+      b.textContent = "+";
+    } else {
+      b.dataset.act = "replace-pick";
+      b.title = "Swap this in for one of the playing streams";
+      b.setAttribute("aria-label", b.title);
+      b.textContent = "⇄";
+    }
+    row.appendChild(b);
+  }
   const selectedUrls = new Set();
   const seekOpenSlots = new Set();
   const ducking = new Set();  // what is talking now: card audio, Read Aloud
@@ -203,10 +226,12 @@ window.backdrop = (() => {
       }
       unmountSlot(prev[i]);
     }
-    // Keep existing iframe parents intact when order hasn't changed so iframes never reload unnecessarily.
+    // Tiles are placed with CSS order, never moved in the page: moving a website or YouTube frame would reload it.
     for (let i = 0; i < nextSlots.length; i++) {
       const el = nextSlots[i].el;
-      if (layer.children[i] !== el) layer.insertBefore(el, layer.children[i] || null);
+      if (el.parentNode !== layer) layer.appendChild(el);
+      el.style.order = String(i);
+      el.dataset.pos = String(i + 1);
     }
     slots = nextSlots;
     const activeUrls = new Set(slots.map((s) => s.url));
@@ -295,9 +320,15 @@ window.backdrop = (() => {
     }
   }
 
+  // Each stream's own level (0–100, default 100) scales the main Volume.
+  const slotLevel = (url) => {
+    const v = cfg && cfg.volumes && cfg.volumes[url];
+    return typeof v === "number" && v >= 0 && v <= 100 ? v : 100;
+  };
+
   function applySlotVolume(slot) {
     if (!slot || !slot.media || !cfg) return;
-    let v = isMuted(slot.url) ? 0 : cfg.volume;
+    let v = isMuted(slot.url) || zoomPaused.has(slot.url) ? 0 : Math.round(cfg.volume * slotLevel(slot.url) / 100);
     if (ducking.size) v = Math.round(v / 4);
     if (slot.kind === "video") {
       slot.media.muted = v === 0;
@@ -305,6 +336,8 @@ window.backdrop = (() => {
     } else if (slot.kind === "youtube") {
       ytSend(slot, { event: "command", func: v ? "unMute" : "mute", args: [] });
       ytSend(slot, { event: "command", func: "setVolume", args: [v] });
+    } else if (slot.kind === "page" && slot.media.contentWindow) {
+      slot.media.contentWindow.postMessage({ bdBridge: "volume", v: v / 100 }, "*");  // a website's own video
     }
   }
 
@@ -412,6 +445,11 @@ window.backdrop = (() => {
     }
     return false;
   };
+  window.addEventListener("message", (e) => {  // P pressed while a backdrop website had the keyboard
+    const m = e.data;
+    if (!m || typeof m !== "object" || m.bdBridge !== "peek") return;
+    if (slots.some((x) => x.media && x.media.contentWindow && fromFrame(e.source, x.media.contentWindow))) peek(!!m.on);
+  });
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (!m || typeof m !== "object" || m.bdBridge !== "status") return;
@@ -600,10 +638,21 @@ window.backdrop = (() => {
     if (!breakPill) {
       breakPill = document.createElement("div");
       breakPill.id = "bd-break-pill";
-      breakPill.innerHTML = `<span class="bd-break-text">Break</span><button type="button" data-act="back-study">Back to Study</button>`;
-      breakPill.addEventListener("mousedown", (e) => e.preventDefault());
+      breakPill.innerHTML = `<span class="bd-break-text">Break</span>
+        <select class="bd-break-len" aria-label="Break length" title="Count up, or count down from a set break length">
+          <option value="0">Count up</option><option value="5">5 min</option><option value="10">10 min</option>
+          <option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option>
+        </select>
+        <button type="button" data-act="back-study">Back to Study</button>`;
+      breakPill.addEventListener("mousedown", (e) => { if (!e.target.closest("select")) e.preventDefault(); });
       breakPill.addEventListener("click", (e) => {
         if (e.target.closest("[data-act=back-study]")) send("backdrop:break:0");
+      });
+      breakPill.querySelector(".bd-break-len").addEventListener("change", (e) => {
+        const m = parseInt(e.target.value, 10) || 0;
+        if (cfg && cfg.break_info) cfg.break_info.minutes = m;
+        set({ break_minutes: m });
+        e.target.blur();
       });
       root.appendChild(breakPill);
     }
@@ -808,6 +857,29 @@ window.backdrop = (() => {
       }
       if (act === "add-saved") {
         if (el.dataset.saveUrl) set({ add_url: el.dataset.saveUrl });
+        return;
+      }
+      if (act === "replace-pick") {
+        replacing = { url: el.dataset.saveUrl, title: el.dataset.saveTitle || "" };
+        activeTab = "controls";  // Now Playing is there
+        update(true);
+        return;
+      }
+      if (act === "replace-cancel") {
+        replacing = null;
+        update(true);
+        return;
+      }
+      if (act === "replace-slot") {
+        const pick = replacing;
+        replacing = null;
+        if (pick) set({ replace: { old: el.dataset.slotUrl, new: pick.url } });
+        update(true);
+        return;
+      }
+      if (act === "rename-item") {
+        renaming = { folder: el.dataset.folderName, url: el.dataset.saveUrl };
+        update(true);
         return;
       }
       if (act === "unsave-item") {
@@ -1166,15 +1238,43 @@ window.backdrop = (() => {
           const fdot = liveDot(it.url);
           if (fdot) b.prepend(fdot);
           row.appendChild(b);
-          if (cfg.on && slots.length < 4 && !activeSet.has(it.url)) {
-            const addB = document.createElement("button");
-            addB.type = "button";
-            addB.className = "bd-recent-del";
-            addB.dataset.act = "add-saved";
-            addB.dataset.saveUrl = it.url;
-            addB.title = "Add to multi-view";
-            addB.textContent = "+";
-            row.appendChild(addB);
+          addOrSwapButton(row, it.url, it.title);
+          if (renaming && renaming.url === it.url && renaming.folder === active.name) {
+            // Inline rename: Enter saves, Esc cancels.
+            const inp = document.createElement("input");
+            inp.type = "text";
+            inp.className = "bd-rename-input";
+            inp.value = it.title || "";
+            inp.placeholder = shortLink(it.url);
+            inp.maxLength = 120;
+            inp.setAttribute("aria-label", "New name");
+            inp.addEventListener("keydown", (e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") { renaming = null; update(true); }
+              if (e.key === "Enter") {
+                const title = inp.value.trim();
+                if (title) {
+                  it.title = title;
+                  set({ rename_item: { folder: active.name, url: it.url, title } });
+                }
+                renaming = null;
+                update(true);
+              }
+            });
+            inp.addEventListener("blur", () => { if (renaming) { renaming = null; setTimeout(() => update(true), 0); } });
+            b.replaceWith(inp);
+            setTimeout(() => { inp.focus(); inp.select(); }, 0);
+          } else {
+            const ren = document.createElement("button");
+            ren.type = "button";
+            ren.className = "bd-recent-del";
+            ren.dataset.act = "rename-item";
+            ren.dataset.folderName = active.name;
+            ren.dataset.saveUrl = it.url;
+            ren.title = "Rename";
+            ren.setAttribute("aria-label", "Rename");
+            ren.textContent = "✎";
+            row.appendChild(ren);
           }
           const del = document.createElement("button");
           del.type = "button";
@@ -1266,6 +1366,20 @@ window.backdrop = (() => {
     const slotsBox = panel.querySelector(".bd-slots");
     if (force || !slots.some((s) => s.seeking)) {
       slotsBox.textContent = "";
+      if (replacing && !(cfg.on && slots.length >= 4)) replacing = null;  // a spot opened up meanwhile
+      if (replacing) {
+        const ask = document.createElement("div");
+        ask.className = "bd-replace-ask";
+        const txt = document.createElement("span");
+        txt.textContent = "Replace which stream with “" + (replacing.title || shortLink(replacing.url)) + "”?";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "bd-slot-btn";
+        cancel.dataset.act = "replace-cancel";
+        cancel.textContent = "Cancel";
+        ask.append(txt, cancel);
+        slotsBox.appendChild(ask);
+      }
       if (cfg.on && slots.length >= 1) {
         for (const s of slots) {
           const seekable = canSlotSeek(s);
@@ -1303,6 +1417,20 @@ window.backdrop = (() => {
             name.title = s.title || s.url;
           }
           top.appendChild(name);
+          if (replacing) {
+            // Picking which stream to swap out: one clear button per row, nothing else.
+            const rb = document.createElement("button");
+            rb.type = "button";
+            rb.className = "bd-slot-btn bd-replace-btn";
+            rb.dataset.act = "replace-slot";
+            rb.dataset.slotUrl = s.url;
+            rb.textContent = "Replace";
+            rb.title = "Replace " + (s.title || shortLink(s.url));
+            top.appendChild(rb);
+            row.appendChild(top);
+            slotsBox.appendChild(row);
+            continue;
+          }
           if (isSeekOpen) {
             const backBtn = document.createElement("button");
             backBtn.type = "button";
@@ -1425,6 +1553,26 @@ window.backdrop = (() => {
               top.append(starBtn, muteBtn, rmBtn);
             }
             row.appendChild(top);
+            // 2+ streams: a slim volume slider for each (the main Volume sets them all).
+            if (slots.length > 1) {
+              const vol = document.createElement("input");
+              vol.type = "range";
+              vol.min = "0";
+              vol.max = "100";
+              vol.className = "bd-slot-vol";
+              vol.value = String(slotLevel(s.url));
+              vol.dataset.slotUrl = s.url;
+              const label = "Volume for " + (s.title || shortLink(s.url));
+              vol.title = label;
+              vol.setAttribute("aria-label", label);
+              vol.addEventListener("input", () => {
+                cfg.volumes = Object.assign({}, cfg.volumes || {}, { [s.url]: +vol.value });
+                applySlotVolume(s);
+              });
+              vol.addEventListener("change", () => { set({ volumes: { [s.url]: +vol.value } }); vol.blur(); });
+              vol.addEventListener("pointerup", () => vol.blur());
+              row.appendChild(vol);
+            }
           }
           slotsBox.appendChild(row);
         }
@@ -1458,16 +1606,7 @@ window.backdrop = (() => {
       const rdot = liveDot(r.url);
       if (rdot) b.prepend(rdot);
       row.appendChild(b);
-      if (cfg.on && slots.length < 4 && !activeSet.has(r.url)) {
-        const addB = document.createElement("button");
-        addB.type = "button";
-        addB.className = "bd-recent-del";
-        addB.dataset.act = "add-saved";
-        addB.dataset.saveUrl = r.url;
-        addB.title = "Play alongside current video";
-        addB.textContent = "+";
-        row.appendChild(addB);
-      }
+      addOrSwapButton(row, r.url, r.title);
       const star = document.createElement("button");
       star.type = "button";
       star.className = "bd-recent-del bd-star" + (isSavedUrl(r.url) ? " bd-saved" : "");
@@ -1674,22 +1813,87 @@ window.backdrop = (() => {
     root.classList.remove("bd-panel-open");
   }
 
+  // During a break with 2+ streams: click a stream to fill the screen with it (the others pause and go quiet),
+  // click again to go back; drag one onto another to swap their places.
+  let zoomed = null;  // url of the stream filling the screen
+  const zoomPaused = new Set();  // streams the zoom paused (not ones you paused yourself)
+
+  function breakTiles(active) {
+    for (const u of Array.from(zoomPaused)) if (!slots.some((x) => x.url === u)) zoomPaused.delete(u);
+    if (zoomed && !slots.some((x) => x.url === zoomed)) {
+      zoomed = null;
+      if (layer) layer.classList.remove("bd-has-zoom");
+    }
+    const on = active && slots.length > 1;
+    if (!on && zoomed) setZoom(null);
+    for (const s of slots) {
+      let hit = s.el.querySelector(":scope > .bd-hit");
+      if (!on) { if (hit) hit.remove(); continue; }
+      if (!hit) {
+        hit = document.createElement("div");
+        hit.className = "bd-hit";
+        hit.draggable = true;
+        hit.addEventListener("click", () => setZoom(zoomed === s.url ? null : s.url));
+        hit.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/bd-slot", s.url); e.dataTransfer.effectAllowed = "move"; });
+        hit.addEventListener("dragover", (e) => { if (!zoomed) { e.preventDefault(); hit.classList.add("bd-drop"); } });
+        hit.addEventListener("dragleave", () => hit.classList.remove("bd-drop"));
+        hit.addEventListener("drop", (e) => {
+          e.preventDefault();
+          hit.classList.remove("bd-drop");
+          const from = e.dataTransfer.getData("text/bd-slot");
+          const urls = slots.map((x) => x.url);
+          const a = urls.indexOf(from), b = urls.indexOf(s.url);
+          if (a < 0 || b < 0 || a === b) return;
+          [urls[a], urls[b]] = [urls[b], urls[a]];
+          set({ order: urls });
+        });
+        s.el.appendChild(hit);
+      }
+      hit.title = zoomed === s.url ? "Click to show all streams again" : "Click to fill the screen with this stream · drag onto another to swap places";
+    }
+  }
+
+  function setZoom(url) {
+    zoomed = url && slots.some((s) => s.url === url) ? url : null;
+    layer && layer.classList.toggle("bd-has-zoom", !!zoomed);
+    for (const s of slots) {
+      const big = s.url === zoomed;
+      s.el.classList.toggle("bd-zoom", big);
+      if (zoomed && !big && !s.held && !cfg.paused && !zoomPaused.has(s.url)) {
+        zoomPaused.add(s.url);
+        pauseSlot(s);
+      } else if ((!zoomed || big) && zoomPaused.has(s.url)) {
+        zoomPaused.delete(s.url);
+        if (!s.held && !cfg.paused) resumeSlot(s);
+      }
+      applySlotVolume(s);
+    }
+    breakTiles(!!(cfg && cfg.break_info && cfg.break_info.active && cfg.on));
+  }
+
   function updateBreak(info) {
     if (cfg) cfg.break_info = info || null;
     const active = !!(info && info.active && cfg && cfg.on);
     root.classList.toggle("bd-break", active);
+    breakTiles(active);
     if (!breakPill) return;
     const txt = breakPill.querySelector(".bd-break-text");
     if (!active) {
       breakPill.classList.remove("bd-rest-done");
       return;
     }
-    const done = !!info.rest_done;
-    breakPill.classList.toggle("bd-rest-done", done);
-    if (done) {
+    const sel = breakPill.querySelector(".bd-break-len");
+    const pomodoro = typeof info.rest_left === "number" || !!info.rest_done;
+    sel.hidden = pomodoro;  // a Pomodoro add-on's rest timer is shown instead
+    if (document.activeElement !== sel) sel.value = String(info.minutes || 0);
+    const over = !!info.rest_done || (!pomodoro && info.minutes > 0 && info.left === 0);
+    breakPill.classList.toggle("bd-rest-done", over);
+    if (info.rest_done) {
       txt.textContent = "Rest complete!";
     } else if (typeof info.rest_left === "number") {
       txt.textContent = "Break · Rest " + fmtTime(info.rest_left);
+    } else if (info.minutes > 0) {
+      txt.textContent = over ? "Break's over" : "Break · " + fmtTime(info.left) + " left";
     } else {
       txt.textContent = "Break · " + fmtTime(info.elapsed || 0);
     }
