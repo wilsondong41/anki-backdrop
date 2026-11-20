@@ -238,6 +238,14 @@ ns["_quick"] = (0.0, None)
 ns["on_js_message"]((False, None), "backdrop:break:1", None)
 bi = ns["state"](False)["break_info"]
 assert bi["minutes"] == 10 and bi["left"] == 600, bi
+# Picking a length mid-break counts down from that moment, not from when the break began.
+ns["_break_started"] -= 180; ns["_countdown_from"] -= 180  # 3 minutes into the break
+assert ns["state"](False)["break_info"]["left"] == 420
+ns["apply"]({"break_minutes": 5})
+ns["_quick"] = (0.0, None)
+bi = ns["state"](False)["break_info"]
+assert bi["minutes"] == 5 and bi["left"] == 300 and bi["elapsed"] >= 180, bi
+ns["apply"]({"break_minutes": 10})
 ns["on_js_message"]((False, None), "backdrop:break:0", None)
 ns["apply"]({"break_minutes": 0})
 generic_pb = types.ModuleType("pb_generic")

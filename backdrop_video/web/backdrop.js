@@ -638,21 +638,24 @@ window.backdrop = (() => {
     if (!breakPill) {
       breakPill = document.createElement("div");
       breakPill.id = "bd-break-pill";
+      // One tap sets a timer (it starts from that moment and is kept for the next break); "Off" just counts up.
       breakPill.innerHTML = `<span class="bd-break-text">Break</span>
-        <select class="bd-break-len" aria-label="Break length" title="Count up, or count down from a set break length">
-          <option value="0">Count up</option><option value="5">5 min</option><option value="10">10 min</option>
-          <option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option>
-        </select>
-        <button type="button" data-act="back-study">Back to Study</button>`;
-      breakPill.addEventListener("mousedown", (e) => { if (!e.target.closest("select")) e.preventDefault(); });
+        <span class="bd-break-len" role="group" aria-label="Break timer" title="Break timer: counts down from when you pick it, and next break uses it too">
+          <span class="bd-break-len-lbl">Timer</span>${[0, 5, 10, 15, 20, 30].map((m) =>
+            `<button type="button" class="bd-len" data-min="${m}">${m ? m : "Off"}</button>`).join("")}<span class="bd-break-len-lbl">min</span>
+        </span>
+        <button type="button" class="bd-back" data-act="back-study">Back to Study</button>
+        <span class="bd-break-bar" aria-hidden="true"><span></span></span>`;
+      breakPill.addEventListener("mousedown", (e) => e.preventDefault());  // the card keeps the keyboard
       breakPill.addEventListener("click", (e) => {
-        if (e.target.closest("[data-act=back-study]")) send("backdrop:break:0");
-      });
-      breakPill.querySelector(".bd-break-len").addEventListener("change", (e) => {
-        const m = parseInt(e.target.value, 10) || 0;
-        if (cfg && cfg.break_info) cfg.break_info.minutes = m;
+        if (e.target.closest("[data-act=back-study]")) return send("backdrop:break:0");
+        const len = e.target.closest(".bd-len");
+        if (!len) return;
+        const m = parseInt(len.dataset.min, 10) || 0;
+        const info = Object.assign({}, (cfg && cfg.break_info) || { active: true, elapsed: 0 }, { minutes: m });
+        if (m) info.left = m * 60; else delete info.left;
+        updateBreak(info);  // show it right away; the next tick from Anki agrees
         set({ break_minutes: m });
-        e.target.blur();
       });
       root.appendChild(breakPill);
     }
@@ -1832,25 +1835,75 @@ window.backdrop = (() => {
       if (!hit) {
         hit = document.createElement("div");
         hit.className = "bd-hit";
-        hit.draggable = true;
-        hit.addEventListener("click", () => setZoom(zoomed === s.url ? null : s.url));
-        hit.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/bd-slot", s.url); e.dataTransfer.effectAllowed = "move"; });
-        hit.addEventListener("dragover", (e) => { if (!zoomed) { e.preventDefault(); hit.classList.add("bd-drop"); } });
-        hit.addEventListener("dragleave", () => hit.classList.remove("bd-drop"));
-        hit.addEventListener("drop", (e) => {
-          e.preventDefault();
-          hit.classList.remove("bd-drop");
-          const from = e.dataTransfer.getData("text/bd-slot");
-          const urls = slots.map((x) => x.url);
-          const a = urls.indexOf(from), b = urls.indexOf(s.url);
-          if (a < 0 || b < 0 || a === b) return;
-          [urls[a], urls[b]] = [urls[b], urls[a]];
-          set({ order: urls });
-        });
+        // Mouse tracking, not the browser's drag-and-drop: Anki's card window refuses drops, so those never land.
+        hit.addEventListener("pointerdown", (e) => tilePointerDown(e, s, hit));
         s.el.appendChild(hit);
       }
       hit.title = zoomed === s.url ? "Click to show all streams again" : "Click to fill the screen with this stream · drag onto another to swap places";
     }
+  }
+
+  // Press a tile: a plain click fills the screen with it; moving it a little picks it up, and letting go over another
+  // tile swaps the two at once (outlined in blue while you're over it).
+  let tileDrag = null;  // {slot, x, y, moved, target}
+  const tileAt = (x, y, except) => slots.find((t) => t !== except && t.el && t.el.style.display !== "none" && (() => {
+    const r = t.el.getBoundingClientRect();
+    return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  })());
+  function markDrop(target) {
+    for (const t of slots) {
+      const h = t.el && t.el.querySelector(":scope > .bd-hit");
+      if (h) h.classList.toggle("bd-drop", t === target);
+    }
+  }
+  function endTileDrag() {
+    if (!tileDrag) return;
+    if (tileDrag.slot.el) tileDrag.slot.el.classList.remove("bd-lifted");
+    if (layer) layer.classList.remove("bd-dragging");
+    markDrop(null);
+    tileDrag = null;
+  }
+  function tilePointerDown(e, s, hit) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { hit.setPointerCapture(e.pointerId); } catch (_) {}
+    tileDrag = { slot: s, x: e.clientX, y: e.clientY, moved: false, target: null };
+    const move = (ev) => {
+      if (!tileDrag) return;
+      if (!tileDrag.moved && Math.hypot(ev.clientX - tileDrag.x, ev.clientY - tileDrag.y) < 6) return;
+      if (zoomed) return;  // one stream fills the screen: nothing to swap with
+      if (!tileDrag.moved) {
+        tileDrag.moved = true;
+        s.el.classList.add("bd-lifted");
+        layer && layer.classList.add("bd-dragging");
+      }
+      tileDrag.target = tileAt(ev.clientX, ev.clientY, s) || null;
+      markDrop(tileDrag.target);
+    };
+    const up = (ev) => {
+      hit.removeEventListener("pointermove", move);
+      hit.removeEventListener("pointerup", up);
+      hit.removeEventListener("pointercancel", up);
+      const d = tileDrag;
+      endTileDrag();
+      if (!d || ev.type === "pointercancel") return;
+      if (!d.moved) { setZoom(zoomed === s.url ? null : s.url); return; }
+      if (d.target) swapTiles(s.url, d.target.url);
+    };
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerup", up);
+    hit.addEventListener("pointercancel", up);
+  }
+  function swapTiles(a, b) {
+    const urls = slots.map((x) => x.url);
+    const i = urls.indexOf(a), j = urls.indexOf(b);
+    if (i < 0 || j < 0 || i === j) return;
+    [urls[i], urls[j]] = [urls[j], urls[i]];
+    // Move them on screen right away (no frame reloads: only the CSS position changes), then save the order.
+    slots.sort((x, y) => urls.indexOf(x.url) - urls.indexOf(y.url));
+    slots.forEach((x, k) => { x.el.style.order = String(k); x.el.dataset.pos = String(k + 1); });
+    if (cfg) { cfg.urls = urls.slice(); cfg.url = urls[0]; }
+    set({ order: urls });
   }
 
   function setZoom(url) {
@@ -1882,18 +1935,22 @@ window.backdrop = (() => {
       breakPill.classList.remove("bd-rest-done");
       return;
     }
-    const sel = breakPill.querySelector(".bd-break-len");
+    const lens = breakPill.querySelector(".bd-break-len");
     const pomodoro = typeof info.rest_left === "number" || !!info.rest_done;
-    sel.hidden = pomodoro;  // a Pomodoro add-on's rest timer is shown instead
-    if (document.activeElement !== sel) sel.value = String(info.minutes || 0);
+    lens.hidden = pomodoro;  // a Pomodoro add-on's rest timer is shown instead
+    for (const b of lens.querySelectorAll(".bd-len")) b.classList.toggle("bd-on", +b.dataset.min === (info.minutes || 0));
     const over = !!info.rest_done || (!pomodoro && info.minutes > 0 && info.left === 0);
     breakPill.classList.toggle("bd-rest-done", over);
+    const counting = !pomodoro && info.minutes > 0;
+    breakPill.classList.toggle("bd-counting", counting);
+    breakPill.querySelector(".bd-break-bar > span").style.width =
+      counting ? Math.max(0, Math.min(100, (info.left / (info.minutes * 60)) * 100)).toFixed(1) + "%" : "0%";
     if (info.rest_done) {
       txt.textContent = "Rest complete!";
     } else if (typeof info.rest_left === "number") {
       txt.textContent = "Break · Rest " + fmtTime(info.rest_left);
     } else if (info.minutes > 0) {
-      txt.textContent = over ? "Break's over" : "Break · " + fmtTime(info.left) + " left";
+      txt.textContent = over ? "Break's over" : fmtTime(info.left) + " left";
     } else {
       txt.textContent = "Break · " + fmtTime(info.elapsed || 0);
     }

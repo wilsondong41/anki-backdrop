@@ -60,6 +60,7 @@ _browse = None
 _last_browse_url = "https://www.youtube.com"
 _break_mode = False
 _break_started = 0.0
+_countdown_from = 0.0  # a countdown runs from when its length was picked (or the break began)
 _break_from_review = False
 _break_timer = None
 ADDON_DIR = os.path.dirname(__file__)
@@ -485,9 +486,10 @@ def _break_info() -> dict:
         return {"active": False}
     minutes = quick_conf().get("break_minutes")
     minutes = minutes if minutes in BREAK_MINUTES else 0
-    info = {"active": True, "elapsed": max(0, int(time.monotonic() - _break_started)), "minutes": minutes}
+    now = time.monotonic()
+    info = {"active": True, "elapsed": max(0, int(now - _break_started)), "minutes": minutes}
     if minutes:
-        info["left"] = max(0, minutes * 60 - info["elapsed"])
+        info["left"] = max(0, minutes * 60 - int(now - max(_break_started, _countdown_from)))
     try:
         info.update(_pomodoro_state())
     except Exception:
@@ -553,12 +555,12 @@ def _stop_break_timer() -> None:
 
 
 def enter_break() -> None:
-    global _break_mode, _break_started, _break_from_review, _break_timer
+    global _break_mode, _break_started, _break_from_review, _break_timer, _countdown_from
     if not conf()["on"] and active_urls():
         save(on=True, paused=False)
     _break_from_review = mw.state == "review"
     _break_mode = True
-    _break_started = time.monotonic()
+    _break_started = _countdown_from = time.monotonic()
     _stop_break_timer()
     try:
         from aqt.qt import QTimer
@@ -1155,7 +1157,7 @@ def set_quality(quality: str) -> None:
 
 def apply(changes: dict) -> None:
     """Changes sent by the quick-controls panel; the page is untrusted, so each value is checked."""
-    global position
+    global position, _countdown_from
     if not isinstance(changes, dict):
         return
     raw_url = changes.get("url")
@@ -1229,7 +1231,8 @@ def apply(changes: dict) -> None:
             kept = {u: v for u, v in old.items() if u not in got and isinstance(u, str)}
             extra["volumes"] = dict(list({**kept, **got}.items())[-50:])  # the 50 most recently set
     if changes.get("break_minutes") in BREAK_MINUTES and not isinstance(changes.get("break_minutes"), bool):
-        extra["break_minutes"] = changes["break_minutes"]
+        extra["break_minutes"] = changes["break_minutes"]  # kept for the next break too
+        _countdown_from = time.monotonic()  # picking a length mid-break starts it from now
     order = changes.get("order")
     if isinstance(order, list):
         cur = active_urls()

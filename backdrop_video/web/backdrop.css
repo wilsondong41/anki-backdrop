@@ -255,7 +255,7 @@
   display: flex;
 }
 
-#bd-break-pill button {
+#bd-break-pill .bd-back {
   margin: 0;
   padding: 5px 12px;
   border: 0;
@@ -266,7 +266,7 @@
   cursor: pointer;
 }
 
-#bd-break-pill.bd-rest-done button {
+#bd-break-pill.bd-rest-done .bd-back {
   background: #f59e0b;
   color: #111827;
 }
@@ -1160,9 +1160,23 @@
 :root.bd-break #bd-layer { pointer-events: auto; }
 #bd-layer .bd-slot > .bd-hit { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2; background: transparent; cursor: zoom-in; opacity: 1; filter: none; transform: none; }
 #bd-layer .bd-slot.bd-zoom > .bd-hit { cursor: zoom-out; }
-#bd-layer .bd-slot > .bd-hit.bd-drop { outline: 3px solid #3b82f6; outline-offset: -3px; }
+#bd-layer .bd-slot > .bd-hit { touch-action: none; }
+#bd-layer:not(.bd-dragging) .bd-slot > .bd-hit:hover { outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
+#bd-layer.bd-dragging, #bd-layer.bd-dragging .bd-hit { cursor: grabbing; }
+#bd-layer .bd-slot.bd-lifted { opacity: 0.55; }
+#bd-layer .bd-slot > .bd-hit.bd-drop { outline: 4px solid #3b82f6; outline-offset: -4px; background: rgba(59, 130, 246, 0.18); }
 #bd-layer.bd-has-zoom > .bd-slot:not(.bd-zoom) { display: none; }
 #bd-layer.bd-has-zoom > .bd-slot.bd-zoom { grid-column: 1 / -1; grid-row: 1 / -1; }
-#bd-break-pill .bd-break-len { font: 12px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; padding: 3px 6px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: inherit; }
-#bd-break-pill .bd-break-len option { color: #111827; }
+/* Break timer: one tap per length, the picked one lit; a thin bar along the bottom drains as it counts down. */
+#bd-break-pill { overflow: hidden; }
+#bd-break-pill .bd-break-text { min-width: 4.6em; font-weight: 600; font-variant-numeric: tabular-nums; }
+#bd-break-pill.bd-counting .bd-break-text { font-size: 15px; }
+#bd-break-pill .bd-break-len { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); }
 #bd-break-pill .bd-break-len[hidden] { display: none; }
+#bd-break-pill .bd-break-len-lbl { font-size: 11px; opacity: 0.6; padding: 0 5px; }
+#bd-break-pill .bd-len { margin: 0; min-width: 28px; padding: 4px 7px; border: 0; border-radius: 999px; background: transparent; color: inherit; font: 12px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+#bd-break-pill .bd-len:hover { background: rgba(255, 255, 255, 0.14); }
+#bd-break-pill .bd-len.bd-on { background: #f3f4f6; color: #111827; font-weight: 600; }
+#bd-break-pill .bd-break-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: transparent; }
+#bd-break-pill .bd-break-bar > span { display: block; height: 100%; width: 0; background: #3b82f6; transition: width 0.9s linear; }
+#bd-break-pill.bd-rest-done .bd-break-bar > span { background: #f59e0b; }

@@ -798,15 +798,28 @@ feat = _rt_exec("""(() => {
   // Break: countdown text, then zoom stream 2 and drag stream 1 onto stream 4.
   backdrop.updateBreak({active: true, elapsed: 70, minutes: 5, left: 230});
   const pillText = document.querySelector("#bd-break-pill .bd-break-text").textContent;
+  const lenBtn = document.querySelector("#bd-break-pill .bd-len[data-min='10']");
+  lenBtn.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+  const picked = document.querySelector("#bd-break-pill .bd-break-text").textContent + "|" +
+    [...document.querySelectorAll("#bd-break-pill .bd-len.bd-on")].map((b) => b.dataset.min).join(",") + "|" +
+    document.querySelector("#bd-break-pill .bd-break-bar > span").style.width;
+  backdrop.updateBreak({active: true, elapsed: 70, minutes: 5, left: 230});
   const hits = document.querySelectorAll("#bd-layer .bd-hit");
-  hits[1].click();
+  const mid = (el) => { const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; };
+  const ptr = (el, type, at) => el.dispatchEvent(new PointerEvent(type, {bubbles: true, button: 0, pointerId: 1, clientX: at.x, clientY: at.y}));
+  const tap = (el) => { ptr(el, "pointerdown", mid(el)); ptr(el, "pointerup", mid(el)); };
+  tap(hits[1]);
   const zoomOk = document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && vids[1].parentElement.classList.contains("bd-zoom");
   const othersStopped = !vids[0].getAttribute("src") && !vids[2].getAttribute("src") && vids[0].muted;
-  hits[1].click();
+  tap(hits[1]);
   const unzoomed = !document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && !!vids[0].getAttribute("src");
-  const dt = new DataTransfer();
-  hits[0].dispatchEvent(new DragEvent("dragstart", {dataTransfer: dt, bubbles: true}));
-  hits[3].dispatchEvent(new DragEvent("drop", {dataTransfer: dt, bubbles: true, cancelable: true}));
+  // Drag stream 1 onto stream 4 with the mouse: the tile under the pointer lights up, letting go swaps them at once.
+  ptr(hits[0], "pointerdown", mid(hits[0]));
+  ptr(hits[0], "pointermove", mid(hits[3]));
+  const lit = [...hits].map((h) => h.classList.contains("bd-drop"));
+  ptr(hits[0], "pointerup", mid(hits[3]));
+  const posNow = vids.map((v) => v.parentElement.dataset.pos).join(",");
+  const litAfter = [...hits].some((h) => h.classList.contains("bd-drop"));
   backdrop.updateBreak({active: true, elapsed: 400, minutes: 5, left: 0});
   const overText = document.querySelector("#bd-break-pill .bd-break-text").textContent;
   backdrop.updateBreak({active: false});
@@ -814,12 +827,14 @@ feat = _rt_exec("""(() => {
   window.pycmd = old;
   const sets = sent.filter((m) => m.startsWith("backdrop:set:")).map((m) => JSON.parse(m.slice(13)));
   return {sliders, vol2, ask, replaceBtns, swap: sets.find((x) => x.replace), rename: sets.find((x) => x.rename_item),
-          pillText, zoomOk, othersStopped, unzoomed, order: (sets.find((x) => x.order) || {}).order, overText, tilesGone};
+          pillText, picked, len: (sets.find((x) => "break_minutes" in x) || {}).break_minutes, zoomOk, othersStopped, unzoomed,
+          lit, litAfter, posNow, order: (sets.find((x) => x.order) || {}).order, overText, tilesGone};
 })()""")
 assert feat == {"sliders": 4, "vol2": 0.4, "ask": "Replace which stream with “Other”?", "replaceBtns": 4,
                 "swap": {"replace": {"old": "https://albums.example/s3", "new": "https://other.example/x"}},
                 "rename": {"rename_item": {"folder": "Cams", "url": "https://other.example/y", "title": "Renamed"}},
-                "pillText": "Break · 3:50 left", "zoomOk": True, "othersStopped": True, "unzoomed": True,
+                "pillText": "3:50 left", "picked": "10:00 left|10|100%", "len": 10, "zoomOk": True, "othersStopped": True, "unzoomed": True,
+                "lit": [False, False, False, True], "litAfter": False, "posNow": "4,2,3,1",
                 "order": ["https://albums.example/s4", "https://albums.example/s2", "https://albums.example/s3", "https://albums.example/s1"],
                 "overText": "Break's over", "tilesGone": 0}, feat
 
