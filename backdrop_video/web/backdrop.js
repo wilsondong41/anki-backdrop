@@ -734,6 +734,9 @@ window.backdrop = (() => {
         <button type="button" class="bd-back" data-act="back-study">Back to Study</button>
         <span class="bd-break-bar" aria-hidden="true"><span></span></span>`;
       breakPill.addEventListener("mousedown", (e) => e.preventDefault());  // the card keeps the keyboard
+      // The bar stays open while the mouse rests on it.
+      breakPill.addEventListener("pointerenter", () => { overPill = true; wake(); });
+      breakPill.addEventListener("pointerleave", () => { overPill = false; wake(); });
       breakPill.addEventListener("click", (e) => {
         if (e.target.closest("[data-act=back-study]")) return send("backdrop:break:0");
         if (e.target.closest("[data-act=pause-all]")) return cfg && cfg.on && setPaused(!cfg.paused);
@@ -1409,13 +1412,13 @@ window.backdrop = (() => {
     b.innerHTML = svg(stopped ? "play" : "pause");
   }
 
-  // The break bar's Pause/Play (everything) and each break tile's own Pause/Play.
+  // The break bar's Pause/Play (every video at once: "Pause all" with 2+) and each break tile's own (just that one).
   function syncPause() {
     if (breakPill && cfg) {
       const b = breakPill.querySelector("[data-act=pause-all]");
-      const p = !!cfg.paused;
-      b.innerHTML = svg(p ? "play" : "pause") + `<span>${p ? "Play" : "Pause"}</span>`;
-      b.title = p ? "Play" : (slots.length > 1 ? "Pause all videos" : "Pause");
+      const p = !!cfg.paused, all = slots.length > 1 ? " all" : "";
+      b.innerHTML = svg(p ? "play" : "pause") + `<span>${p ? "Play" : "Pause"}${all}</span>`;
+      b.title = p ? `Play${all}` : (all ? "Pause all videos (each video's own button pauses just that one)" : "Pause");
       b.setAttribute("aria-label", b.title);
     }
     for (const s of slots) {
@@ -1939,8 +1942,8 @@ window.backdrop = (() => {
     for (const s of slots) {
       let hit = s.el.querySelector(":scope > .bd-hit");
       let hold = s.el.querySelector(":scope > .bd-tile-hold");
-      if (!on) { if (hit) hit.remove(); if (hold) hold.remove(); continue; }
-      if (!hold) {
+      if (!active) { if (hold) hold.remove(); }
+      else if (!hold) {
         hold = document.createElement("button");
         hold.type = "button";
         hold.className = "bd-tile-hold";
@@ -1949,6 +1952,7 @@ window.backdrop = (() => {
         hold.addEventListener("click", (e) => { e.stopPropagation(); toggleOne(s); });
         s.el.appendChild(hold);
       }
+      if (!on) { if (hit) hit.remove(); continue; }
       if (!hit) {
         hit = document.createElement("div");
         hit.className = "bd-hit";
@@ -2042,10 +2046,36 @@ window.backdrop = (() => {
     breakTiles(!!(cfg && cfg.break_info && cfg.break_info.active && cfg.on));
   }
 
+  // On a break, once the mouse rests for a moment the pause buttons hide and the bar shrinks to just its timer;
+  // any mouse movement (over a website video too, via the bridge) brings them back.
+  const IDLE_MS = 1500;
+  let idleTimer = null, overPill = false, lastWake = 0;
+  function wake() {
+    if (!root.classList.contains("bd-break")) return;
+    const now = Date.now();
+    if (now - lastWake < 150 && !root.classList.contains("bd-idle")) return;  // mouse moves fire very often
+    lastWake = now;
+    root.classList.remove("bd-idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (overPill) return;
+      if (root.classList.contains("bd-break")) root.classList.add("bd-idle");
+    }, IDLE_MS);
+  }
+  for (const ev of ["pointermove", "pointerdown", "wheel", "keydown"]) document.addEventListener(ev, wake, { capture: true, passive: true });
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (m && typeof m === "object" && m.bdBridge === "activity" &&
+        slots.some((x) => x.media && x.media.contentWindow && fromFrame(e.source, x.media.contentWindow))) wake();
+  });
+
   function updateBreak(info) {
     if (cfg) cfg.break_info = info || null;
     const active = !!(info && info.active && cfg && cfg.on);
+    const was = root.classList.contains("bd-break");
     root.classList.toggle("bd-break", active);
+    if (active && !was) { lastWake = 0; overPill = false; wake(); }
+    if (!active) { clearTimeout(idleTimer); root.classList.remove("bd-idle"); }
     breakTiles(active);
     if (!breakPill) return;
     const txt = breakPill.querySelector(".bd-break-text");

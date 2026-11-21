@@ -2378,6 +2378,14 @@ BRIDGE_JS = r"""
   };
   window.addEventListener("keydown", peekKey(true), true);
   window.addEventListener("keyup", peekKey(false), true);
+  // Mouse movement over this website: tell the card page, which tucks its break controls away when the mouse rests.
+  let lastMove = 0;
+  window.addEventListener("pointermove", () => {
+    const now = Date.now();
+    if (now - lastMove < 300) return;
+    lastMove = now;
+    try { window.top.postMessage({ bdBridge: "activity" }, "*"); } catch (_) {}
+  }, { capture: true, passive: true });
 })();
 """
 

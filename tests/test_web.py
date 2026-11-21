@@ -862,26 +862,60 @@ pz = _rt_exec("""(() => { try {
   const tiles = [...document.querySelectorAll("#bd-layer .bd-tile-hold")];
   const bar = document.querySelector("#bd-break-pill [data-act=pause-all]");
   for (const t of tiles) t.style.transition = "none";  // read the opacity it settles at
-  const shown = tiles.length === 2 && bar.textContent === "Pause" && getComputedStyle(tiles[0]).opacity === "0";
+  const shown = tiles.length === 2 && bar.textContent === "Pause all" && getComputedStyle(tiles[0]).opacity === "1";
   tiles[0].dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, button: 0, pointerId: 1}));
   tiles[0].click();
   const justOne = !vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && !document.querySelector("#bd-layer.bd-has-zoom") &&
     tiles[0].classList.contains("bd-held") && getComputedStyle(tiles[0]).opacity === "1" && JSON.stringify(sets().pop()) === '{"held":["https://albums.example/p1"]}';
   tiles[1].click();  // the last one playing: same as the main Pause
-  const allViaTile = !vids[1].getAttribute("src") && bar.textContent === "Play" && sets().pop().paused === true;
+  const allViaTile = !vids[1].getAttribute("src") && bar.textContent === "Play all" && sets().pop().paused === true;
   bar.click();  // Play resumes both
-  const barPlays = !!vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause";
+  const barPlays = !!vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause all";
   bar.click();
   const barPaused = !vids[0].getAttribute("src") && !vids[1].getAttribute("src") && tiles.every((t) => t.classList.contains("bd-held"));
   tiles[1].click();  // everything paused: play just this one
-  const onlySecond = !vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause" &&
+  const onlySecond = !vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause all" &&
     JSON.stringify(sets().pop()) === '{"paused":false,"held":["https://albums.example/p1"]}';
   backdrop.updateBreak({active: false});
   const gone = document.querySelectorAll("#bd-layer .bd-tile-hold").length;
+  // One video on a break: its tile has its own Pause too (no zoom layer), and the bar says just "Pause".
+  backdrop.start(Object.assign({}, window._cfg, base, {streams: [vid(1)], urls: [vid(1).url], url: vid(1).url}));
+  backdrop.updateBreak({active: true, elapsed: 10});
+  const lone = document.querySelectorAll("#bd-layer .bd-tile-hold").length === 1 && !document.querySelector("#bd-layer .bd-hit") &&
+    document.querySelector("#bd-break-pill [data-act=pause-all]").textContent === "Pause";
+  backdrop.updateBreak({active: false});
   window.pycmd = old;
-  return {one, onePaused, onePlays, shown, justOne, allViaTile, barPlays, barPaused, onlySecond, gone};
+  return {one, onePaused, onePlays, shown, justOne, allViaTile, barPlays, barPaused, onlySecond, gone, lone};
   } catch (e) { return String(e && e.stack || e); } })()""")
 assert pz == {"one": True, "onePaused": True, "onePlays": True, "shown": True, "justOne": True, "allViaTile": True,
-              "barPlays": True, "barPaused": True, "onlySecond": True, "gone": 0}, pz
+              "barPlays": True, "barPaused": True, "onlySecond": True, "gone": 0, "lone": True}, pz
+
+# Break, mouse resting: after 1.5 s the tile buttons hide (a paused one stays faint) and the bar shrinks to its timer;
+# moving the mouse brings them back. Once the break is over the bar stays full.
+_rt_exec("""(() => {
+  const vid = (n) => ({url: "https://albums.example/i" + n, kind: "video", src: "http://127.0.0.1:9/t/i" + n + ".webm", start: 0, live: true, vod: false, title: "I" + n});
+  backdrop.start(Object.assign({}, window._cfg, {on: true, paused: false, held: ["https://albums.example/i2"], muted: [], volume: 50,
+    streams: [vid(1), vid(2)], urls: [vid(1).url, vid(2).url], url: vid(1).url, break_info: {active: false}}));
+  backdrop.updateBreak({active: true, elapsed: 10, minutes: 5, left: 290});
+  for (const t of document.querySelectorAll("#bd-layer .bd-tile-hold, #bd-break-pill")) t.style.transition = "none";
+  return 1; })()""")
+loop_i = QEventLoop(); QTimer.singleShot(1800, loop_i.quit); loop_i.exec()
+idle = _rt_exec("""(() => {
+  const vis = (sel) => getComputedStyle(document.querySelector(sel)).display !== "none";
+  const tiles = [...document.querySelectorAll("#bd-layer .bd-tile-hold")].map((t) => getComputedStyle(t).opacity).join(",");
+  const r = {idle: document.documentElement.classList.contains("bd-idle"), tiles, timer: vis("#bd-break-pill .bd-break-text"),
+    pause: vis("#bd-break-pill [data-act=pause-all]"), back: vis("#bd-break-pill .bd-back"), lens: vis("#bd-break-pill .bd-break-len")};
+  document.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: 5, clientY: 5}));
+  r.woke = !document.documentElement.classList.contains("bd-idle") && vis("#bd-break-pill [data-act=pause-all]") &&
+    getComputedStyle(document.querySelector("#bd-layer .bd-tile-hold")).opacity === "1";
+  return r; })()""")
+assert idle == {"idle": True, "tiles": "0,0.6", "timer": True, "pause": False, "back": False, "lens": False, "woke": True}, idle
+_rt_exec("backdrop.updateBreak({active: true, elapsed: 400, minutes: 5, left: 0}); 1")
+loop_o = QEventLoop(); QTimer.singleShot(1800, loop_o.quit); loop_o.exec()
+over = _rt_exec("""(() => [document.documentElement.classList.contains("bd-idle"),
+  getComputedStyle(document.querySelector("#bd-break-pill .bd-back")).display !== "none"].join())()""")
+assert over == "true,true", over  # resting, but Break's over: Back to Study stays in view
+_rt_exec("backdrop.updateBreak({active: false}); 1")
+assert _rt_exec("document.documentElement.classList.contains('bd-idle')") is False
 
 print("web ok")
