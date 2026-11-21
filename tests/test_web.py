@@ -758,8 +758,8 @@ assert hold == {"stillDuringSkip": True, "newSrc": "http://127.0.0.1:9/t/v1.webm
                 "frozenShown": True, "frozenUnloaded": True, "otherPlaying": True, "playBtn": "Play this video",
                 "chipAfterPause": "0:52"}, hold
 one = _rt_exec("""(() => { const c = Object.assign({}, window._cfg, {paused: false, held: [], streams: [{url: "https://albums.example/v1", kind: "video", src: "http://127.0.0.1:9/t/v1.webm", live: true, vod: true, duration: 600, title: "V1"}], urls: ["https://albums.example/v1"], url: "https://albums.example/v1"});
-  backdrop.start(c); return !!document.querySelector("#bd-panel [data-act='hold-slot']"); })()""")
-assert one is False  # one video: the main Pause does it
+  backdrop.start(c); const b = document.querySelector("#bd-panel [data-act='hold-slot']"); return b && b.title; })()""")
+assert one == "Pause", one  # one video still has its own Pause (it's the main Pause)
 _rt_exec("""(() => { const c = Object.assign({}, window._cfg); backdrop.start(c);
   window._bf2 = document.querySelectorAll("#bd-layer iframe")[0]; _bf2.focus(); return 1; })()""")
 loop_f = QEventLoop(); QTimer.singleShot(200, loop_f.quit); loop_f.exec()
@@ -837,5 +837,51 @@ assert feat == {"sliders": 4, "vol2": 0.4, "ask": "Replace which stream with “
                 "lit": [False, False, False, True], "litAfter": False, "posNow": "4,2,3,1",
                 "order": ["https://albums.example/s4", "https://albums.example/s2", "https://albums.example/s3", "https://albums.example/s1"],
                 "overText": "Break's over", "tilesGone": 0}, feat
+
+# Pause/Play for each video: its Now Playing row (even when it's the only one), the break bar, and each break tile.
+pz = _rt_exec("""(() => { try {
+  const vid = (n) => ({url: "https://albums.example/p" + n, kind: "video", src: "http://127.0.0.1:9/t/p" + n + ".webm", start: 0, live: true, vod: false, title: "P" + n});
+  const sent = []; const old = window.pycmd; window.pycmd = (m) => sent.push(m);
+  const sets = () => sent.filter((m) => m.startsWith("backdrop:set:")).map((m) => JSON.parse(m.slice(13)));
+  const base = {on: true, paused: false, held: [], muted: [], volume: 50, break_info: {active: false}};
+  // One video: its row has Pause, which is the main Pause.
+  backdrop.start(Object.assign({}, window._cfg, base, {streams: [vid(1)], urls: [vid(1).url], url: vid(1).url}));
+  const ctl = document.querySelector("#bd-panel [data-tab=controls]"); ctl && ctl.click();
+  const row = () => document.querySelector("#bd-panel [data-act=hold-slot]");
+  const one = !!row() && row().title === "Pause";
+  row().click();
+  const v1 = document.querySelector("#bd-layer video");
+  const onePaused = !v1.getAttribute("src") && row().title === "Play" &&
+    document.querySelector("#bd-panel .bd-buttons [data-act=pause]").title === "Play" && JSON.stringify(sets().pop()) === '{"paused":true}';
+  row().click();
+  const onePlays = !!v1.getAttribute("src") && row().title === "Pause";
+  // Two videos on a break: the bar has Pause, each tile has its own.
+  backdrop.start(Object.assign({}, window._cfg, base, {streams: [vid(1), vid(2)], urls: [vid(1).url, vid(2).url], url: vid(1).url}));
+  backdrop.updateBreak({active: true, elapsed: 10});
+  const vids = [...document.querySelectorAll("#bd-layer video")];
+  const tiles = [...document.querySelectorAll("#bd-layer .bd-tile-hold")];
+  const bar = document.querySelector("#bd-break-pill [data-act=pause-all]");
+  for (const t of tiles) t.style.transition = "none";  // read the opacity it settles at
+  const shown = tiles.length === 2 && bar.textContent === "Pause" && getComputedStyle(tiles[0]).opacity === "0";
+  tiles[0].dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, button: 0, pointerId: 1}));
+  tiles[0].click();
+  const justOne = !vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && !document.querySelector("#bd-layer.bd-has-zoom") &&
+    tiles[0].classList.contains("bd-held") && getComputedStyle(tiles[0]).opacity === "1" && JSON.stringify(sets().pop()) === '{"held":["https://albums.example/p1"]}';
+  tiles[1].click();  // the last one playing: same as the main Pause
+  const allViaTile = !vids[1].getAttribute("src") && bar.textContent === "Play" && sets().pop().paused === true;
+  bar.click();  // Play resumes both
+  const barPlays = !!vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause";
+  bar.click();
+  const barPaused = !vids[0].getAttribute("src") && !vids[1].getAttribute("src") && tiles.every((t) => t.classList.contains("bd-held"));
+  tiles[1].click();  // everything paused: play just this one
+  const onlySecond = !vids[0].getAttribute("src") && !!vids[1].getAttribute("src") && bar.textContent === "Pause" &&
+    JSON.stringify(sets().pop()) === '{"paused":false,"held":["https://albums.example/p1"]}';
+  backdrop.updateBreak({active: false});
+  const gone = document.querySelectorAll("#bd-layer .bd-tile-hold").length;
+  window.pycmd = old;
+  return {one, onePaused, onePlays, shown, justOne, allViaTile, barPlays, barPaused, onlySecond, gone};
+  } catch (e) { return String(e && e.stack || e); } })()""")
+assert pz == {"one": True, "onePaused": True, "onePlays": True, "shown": True, "justOne": True, "allViaTile": True,
+              "barPlays": True, "barPaused": True, "onlySecond": True, "gone": 0}, pz
 
 print("web ok")

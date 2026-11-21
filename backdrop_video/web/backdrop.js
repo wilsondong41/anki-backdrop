@@ -378,6 +378,27 @@ window.backdrop = (() => {
     update();
   }
 
+  // A video's own Pause/Play (its row in Now Playing, or its tile during a break). With one video, or when it's the
+  // last one still playing, this is the main Pause, so the main button and the break bar always agree.
+  const isStopped = (s) => !!(cfg.paused || s.held);
+  function toggleOne(s) {
+    const others = slots.filter((x) => x !== s);
+    if (!isStopped(s)) {
+      if (others.every(isStopped)) setPaused(true);  // the last one playing: same as the main Pause (Play resumes all)
+      else setHeld(s, true);
+      return;
+    }
+    if (!cfg.paused) return setHeld(s, false);
+    // Everything was paused: play just this one, the rest stay paused.
+    cfg.paused = false;
+    for (const x of others) x.held = true;
+    s.held = false;
+    cfg.held = others.map((x) => x.url);
+    resumeSlot(s);
+    set({ paused: false, held: cfg.held });
+    update();
+  }
+
   function unload(s) {
     s.media.removeAttribute("src");
     s.media.load();
@@ -709,11 +730,13 @@ window.backdrop = (() => {
           <span class="bd-break-len-lbl">Timer</span>${[0, 5, 10, 15, 20, 30].map((m) =>
             `<button type="button" class="bd-len" data-min="${m}">${m ? m : "Off"}</button>`).join("")}<span class="bd-break-len-lbl">min</span>
         </span>
+        <button type="button" class="bd-pill-pause" data-act="pause-all"></button>
         <button type="button" class="bd-back" data-act="back-study">Back to Study</button>
         <span class="bd-break-bar" aria-hidden="true"><span></span></span>`;
       breakPill.addEventListener("mousedown", (e) => e.preventDefault());  // the card keeps the keyboard
       breakPill.addEventListener("click", (e) => {
         if (e.target.closest("[data-act=back-study]")) return send("backdrop:break:0");
+        if (e.target.closest("[data-act=pause-all]")) return cfg && cfg.on && setPaused(!cfg.paused);
         const len = e.target.closest(".bd-len");
         if (!len) return;
         const m = parseInt(len.dataset.min, 10) || 0;
@@ -828,7 +851,7 @@ window.backdrop = (() => {
       }
       if (act === "hold-slot") {
         const s = slots.find((x) => x.url === el.dataset.slotUrl);
-        if (s) setHeld(s, !s.held);
+        if (s) toggleOne(s);
         return;
       }
       if (act === "album-slot") {
@@ -1375,8 +1398,35 @@ window.backdrop = (() => {
     b.disabled = !!disabled;
   }
 
+  // Pause/Play look for one video's button: paused (on its own or with everything) shows Play.
+  function holdLook(b, s, base) {
+    const stopped = isStopped(s);
+    const tip = stopped ? (slots.length > 1 ? "Play this video" : "Play")
+      : (slots.length > 1 ? "Pause just this video (the others keep playing)" : "Pause");
+    b.className = base + (stopped ? " bd-held" : "");
+    b.title = tip;
+    b.setAttribute("aria-label", tip);
+    b.innerHTML = svg(stopped ? "play" : "pause");
+  }
+
+  // The break bar's Pause/Play (everything) and each break tile's own Pause/Play.
+  function syncPause() {
+    if (breakPill && cfg) {
+      const b = breakPill.querySelector("[data-act=pause-all]");
+      const p = !!cfg.paused;
+      b.innerHTML = svg(p ? "play" : "pause") + `<span>${p ? "Play" : "Pause"}</span>`;
+      b.title = p ? "Play" : (slots.length > 1 ? "Pause all videos" : "Pause");
+      b.setAttribute("aria-label", b.title);
+    }
+    for (const s of slots) {
+      const t = s.el && s.el.querySelector(":scope > .bd-tile-hold");
+      if (t) holdLook(t, s, "bd-tile-hold");
+    }
+  }
+
   function update(force = false) {
     if (!panel) return;
+    syncPause();
     if (cfg && cfg.panel) setTimeout(() => askLive(false), 0);  // after the lists below are drawn
     panel.classList.toggle("bd-dark", night());
     const nowEl = panel.querySelector(".bd-now");
@@ -1605,21 +1655,13 @@ window.backdrop = (() => {
             rmBtn.dataset.slotUrl = s.url;
             rmBtn.title = "Remove stream";
             rmBtn.textContent = "×";
-            // Pause just this video (shown with 2+ videos; one video uses the main Pause, which also keeps its frame).
-            if (slots.length > 1 || s.held) {
-              const holdBtn = document.createElement("button");
-              holdBtn.type = "button";
-              holdBtn.className = "bd-slot-btn bd-slot-ico" + (s.held ? " bd-held" : "");
-              holdBtn.dataset.act = "hold-slot";
-              holdBtn.dataset.slotUrl = s.url;
-              const tip = s.held ? "Play this video" : "Pause just this video (the others keep playing)";
-              holdBtn.title = tip;
-              holdBtn.setAttribute("aria-label", tip);
-              holdBtn.innerHTML = svg(s.held ? "play" : "pause");
-              top.append(starBtn, holdBtn, muteBtn, rmBtn);
-            } else {
-              top.append(starBtn, muteBtn, rmBtn);
-            }
+            // Pause/Play this video (with 2+, the others keep playing).
+            const holdBtn = document.createElement("button");
+            holdBtn.type = "button";
+            holdBtn.dataset.act = "hold-slot";
+            holdBtn.dataset.slotUrl = s.url;
+            holdLook(holdBtn, s, "bd-slot-btn bd-slot-ico");
+            top.append(starBtn, holdBtn, muteBtn, rmBtn);
             row.appendChild(top);
             // 2+ streams: a slim volume slider for each (the main Volume sets them all).
             if (slots.length > 1) {
@@ -1896,7 +1938,17 @@ window.backdrop = (() => {
     if (!on && zoomed) setZoom(null);
     for (const s of slots) {
       let hit = s.el.querySelector(":scope > .bd-hit");
-      if (!on) { if (hit) hit.remove(); continue; }
+      let hold = s.el.querySelector(":scope > .bd-tile-hold");
+      if (!on) { if (hit) hit.remove(); if (hold) hold.remove(); continue; }
+      if (!hold) {
+        hold = document.createElement("button");
+        hold.type = "button";
+        hold.className = "bd-tile-hold";
+        // Its own button above the tile: pressing it never zooms or drags, and the card keeps the keyboard.
+        hold.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); });
+        hold.addEventListener("click", (e) => { e.stopPropagation(); toggleOne(s); });
+        s.el.appendChild(hold);
+      }
       if (!hit) {
         hit = document.createElement("div");
         hit.className = "bd-hit";
@@ -1906,6 +1958,7 @@ window.backdrop = (() => {
       }
       hit.title = zoomed === s.url ? "Click to show all streams again" : "Click to fill the screen with this stream · drag onto another to swap places";
     }
+    syncPause();
   }
 
   // Press a tile: a plain click fills the screen with it; moving it a little picks it up, and letting go over another
