@@ -804,22 +804,29 @@ feat = _rt_exec("""(() => {
     [...document.querySelectorAll("#bd-break-pill .bd-len.bd-on")].map((b) => b.dataset.min).join(",") + "|" +
     document.querySelector("#bd-break-pill .bd-break-bar > span").style.width;
   backdrop.updateBreak({active: true, elapsed: 70, minutes: 5, left: 230});
-  const hits = document.querySelectorAll("#bd-layer .bd-hit");
+  let hits = document.querySelectorAll("#bd-layer .bd-hit");
   const mid = (el) => { const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; };
   const ptr = (el, type, at) => el.dispatchEvent(new PointerEvent(type, {bubbles: true, button: 0, pointerId: 1, clientX: at.x, clientY: at.y}));
   const tap = (el) => { ptr(el, "pointerdown", mid(el)); ptr(el, "pointerup", mid(el)); };
   tap(hits[1]);
-  const zoomOk = document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && vids[1].parentElement.classList.contains("bd-zoom");
+  const showAll = document.querySelector("#bd-break-pill [data-act=show-all]");
+  const zoomOk = document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && vids[1].parentElement.classList.contains("bd-zoom") &&
+    !vids[1].parentElement.querySelector(".bd-hit") && !vids[1].parentElement.querySelector(".bd-tile-hold") && !showAll.hidden &&
+    document.querySelector("#bd-break-pill [data-act=pause-all]").textContent === "Pause";
   const othersStopped = !vids[0].getAttribute("src") && !vids[2].getAttribute("src") && vids[0].muted;
-  tap(hits[1]);
-  const unzoomed = !document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && !!vids[0].getAttribute("src");
+  showAll.click();
+  const allBack = showAll.hidden && document.querySelectorAll("#bd-layer .bd-hit").length === 4;
+  const unzoomed = allBack && !document.querySelector("#bd-layer").classList.contains("bd-has-zoom") && !!vids[0].getAttribute("src");
+  hits = document.querySelectorAll("#bd-layer .bd-hit");
   // Drag stream 1 onto stream 4 with the mouse: the tile under the pointer lights up, letting go swaps them at once.
   ptr(hits[0], "pointerdown", mid(hits[0]));
   ptr(hits[0], "pointermove", mid(hits[3]));
   const lit = [...hits].map((h) => h.classList.contains("bd-drop"));
+  const ghost = vids[0].parentElement.classList.contains("bd-lifted") && /scale\(0\.42\)/.test(vids[0].parentElement.style.transform) &&
+    getComputedStyle(vids[0].parentElement).pointerEvents === "none";
   ptr(hits[0], "pointerup", mid(hits[3]));
   const posNow = vids.map((v) => v.parentElement.dataset.pos).join(",");
-  const litAfter = [...hits].some((h) => h.classList.contains("bd-drop"));
+  const litAfter = [...hits].some((h) => h.classList.contains("bd-drop")) || !ghost || !!vids[0].parentElement.style.transform;
   backdrop.updateBreak({active: true, elapsed: 400, minutes: 5, left: 0});
   const overText = document.querySelector("#bd-break-pill .bd-break-text").textContent;
   backdrop.updateBreak({active: false});
@@ -878,10 +885,10 @@ pz = _rt_exec("""(() => { try {
     JSON.stringify(sets().pop()) === '{"paused":false,"held":["https://albums.example/p1"]}';
   backdrop.updateBreak({active: false});
   const gone = document.querySelectorAll("#bd-layer .bd-tile-hold").length;
-  // One video on a break: its tile has its own Pause too (no zoom layer), and the bar says just "Pause".
+  // One video on a break: no tile buttons (the bar's Pause is that video), and the bar says just "Pause".
   backdrop.start(Object.assign({}, window._cfg, base, {streams: [vid(1)], urls: [vid(1).url], url: vid(1).url}));
   backdrop.updateBreak({active: true, elapsed: 10});
-  const lone = document.querySelectorAll("#bd-layer .bd-tile-hold").length === 1 && !document.querySelector("#bd-layer .bd-hit") &&
+  const lone = document.querySelectorAll("#bd-layer .bd-tile-hold").length === 0 && !document.querySelector("#bd-layer .bd-hit") &&
     document.querySelector("#bd-break-pill [data-act=pause-all]").textContent === "Pause";
   backdrop.updateBreak({active: false});
   window.pycmd = old;
@@ -917,5 +924,32 @@ over = _rt_exec("""(() => [document.documentElement.classList.contains("bd-idle"
 assert over == "true,true", over  # resting, but Break's over: Back to Study stays in view
 _rt_exec("backdrop.updateBreak({active: false}); 1")
 assert _rt_exec("document.documentElement.classList.contains('bd-idle')") is False
+
+# The website script (any site): in the break grid it lifts the site's video above the site's own title and buttons,
+# and puts the page back when told to show them (the focused stream). Run here in a same-origin frame made to look
+# like a site: video inside a stacked player, with a title bar drawn above it.
+_rt_exec("""(() => {
+  const f = document.createElement("iframe");
+  f.id = "bd-fake-site";
+  f.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px;border:0;z-index:2147483646";
+  f.srcdoc = `<body style="margin:0"><div id="player" style="position:relative;z-index:1;width:400px;height:300px;transform:translateZ(0)">
+    <div style="position:relative;z-index:10;width:100%;height:100%;overflow:hidden"><video id="v" style="position:absolute;left:20px;top:20px;width:300px;height:200px"></video></div>
+    <div id="title" style="position:absolute;z-index:60;left:0;top:0;right:0;height:300px;background:red">Title</div></div></body>`;
+  document.body.appendChild(f); return 1; })()""")
+loop_s = QEventLoop(); QTimer.singleShot(500, loop_s.quit); loop_s.exec()
+_rt_exec("""(() => { const w = document.getElementById("bd-fake-site").contentWindow;
+  Object.defineProperty(w.document.getElementById("v"), "readyState", {get: () => 4});
+  w.eval(%s); w.postMessage({bdBridge: "chrome", show: false}, "*"); return 1; })()""" % json.dumps(_bv.BRIDGE_JS))
+loop_s = QEventLoop(); QTimer.singleShot(200, loop_s.quit); loop_s.exec()
+solo = _rt_exec("""(() => { const d = document.getElementById("bd-fake-site").contentDocument;
+  const r = [d.elementFromPoint(200, 150).id, d.elementFromPoint(5, 5).id];
+  d.defaultView.postMessage({bdBridge: "chrome", show: true}, "*"); return r; })()""")
+loop_s = QEventLoop(); QTimer.singleShot(200, loop_s.quit); loop_s.exec()
+back = _rt_exec("""(() => { const d = document.getElementById("bd-fake-site").contentDocument;
+  const r = [d.elementFromPoint(200, 150).id, !d.querySelector("[data-bd-solo],[data-bd-solo-up]"), !d.getElementById("bd-solo-style"),
+    d.getElementById("v").style.width];
+  document.getElementById("bd-fake-site").remove(); return r; })()""")
+assert solo == ["v", "v"], solo  # only the video shows, filling the frame
+assert back == ["title", True, True, "300px"], back  # the site as it was
 
 print("web ok")

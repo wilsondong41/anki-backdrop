@@ -361,7 +361,7 @@ window.backdrop = (() => {
     for (const s of slots) {
       if (!s.media) continue;
       if (paused) { if (!wasHeld.includes(s)) pauseSlot(s); }
-      else resumeSlot(s);
+      else if (!zoomPaused.has(s.url)) resumeSlot(s);  // ones hidden behind a focused stream stay paused
     }
     set(paused ? { paused } : { paused, held: [] });
     update();
@@ -562,6 +562,7 @@ window.backdrop = (() => {
     for (const s of slots) {
       if (s.kind === "page" && s.media && s.media.contentWindow) s.media.contentWindow.postMessage({ bdBridge: "watch" }, "*");
     }
+    syncChrome();  // a website that loads late gets told too
   }, 1000);
 
   window.addEventListener("message", (e) => {
@@ -731,6 +732,7 @@ window.backdrop = (() => {
             `<button type="button" class="bd-len" data-min="${m}">${m ? m : "Off"}</button>`).join("")}<span class="bd-break-len-lbl">min</span>
         </span>
         <button type="button" class="bd-pill-pause" data-act="pause-all"></button>
+        <button type="button" class="bd-pill-pause" data-act="show-all" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z"/></svg><span>Show all</span></button>
         <button type="button" class="bd-back" data-act="back-study">Back to Study</button>
         <span class="bd-break-bar" aria-hidden="true"><span></span></span>`;
       breakPill.addEventListener("mousedown", (e) => e.preventDefault());  // the card keeps the keyboard
@@ -740,6 +742,7 @@ window.backdrop = (() => {
       breakPill.addEventListener("click", (e) => {
         if (e.target.closest("[data-act=back-study]")) return send("backdrop:break:0");
         if (e.target.closest("[data-act=pause-all]")) return cfg && cfg.on && setPaused(!cfg.paused);
+        if (e.target.closest("[data-act=show-all]")) return setZoom(null);
         const len = e.target.closest(".bd-len");
         if (!len) return;
         const m = parseInt(len.dataset.min, 10) || 0;
@@ -1416,10 +1419,13 @@ window.backdrop = (() => {
   function syncPause() {
     if (breakPill && cfg) {
       const b = breakPill.querySelector("[data-act=pause-all]");
-      const p = !!cfg.paused, all = slots.length > 1 ? " all" : "";
+      const p = !!cfg.paused, all = slots.length > 1 && !zoomed ? " all" : "";
       b.innerHTML = svg(p ? "play" : "pause") + `<span>${p ? "Play" : "Pause"}${all}</span>`;
       b.title = p ? `Play${all}` : (all ? "Pause all videos (each video's own button pauses just that one)" : "Pause");
       b.setAttribute("aria-label", b.title);
+      const back = breakPill.querySelector("[data-act=show-all]");
+      back.hidden = !zoomed;
+      back.title = "Show all streams again";
     }
     for (const s of slots) {
       const t = s.el && s.el.querySelector(":scope > .bd-tile-hold");
@@ -1942,7 +1948,8 @@ window.backdrop = (() => {
     for (const s of slots) {
       let hit = s.el.querySelector(":scope > .bd-hit");
       let hold = s.el.querySelector(":scope > .bd-tile-hold");
-      if (!active) { if (hold) hold.remove(); }
+      // Its own Pause only in the grid (one stream on screen: the bar's Pause is that one).
+      if (!on || zoomed) { if (hold) hold.remove(); }
       else if (!hold) {
         hold = document.createElement("button");
         hold.type = "button";
@@ -1952,7 +1959,8 @@ window.backdrop = (() => {
         hold.addEventListener("click", (e) => { e.stopPropagation(); toggleOne(s); });
         s.el.appendChild(hold);
       }
-      if (!on) { if (hit) hit.remove(); continue; }
+      // The focused stream has no click layer, so the website's own controls work; the bar's "Show all" goes back.
+      if (!on || zoomed === s.url) { if (hit) hit.remove(); continue; }
       if (!hit) {
         hit = document.createElement("div");
         hit.className = "bd-hit";
@@ -1960,9 +1968,24 @@ window.backdrop = (() => {
         hit.addEventListener("pointerdown", (e) => tilePointerDown(e, s, hit));
         s.el.appendChild(hit);
       }
-      hit.title = zoomed === s.url ? "Click to show all streams again" : "Click to fill the screen with this stream · drag onto another to swap places";
+      hit.title = "Click to fill the screen with this stream · drag onto another to swap places";
     }
     syncPause();
+    syncChrome();
+  }
+
+  // Websites' own title, buttons and pause screens: hidden in the break grid (2+ streams), shown when one is focused
+  // or there's only one (the bridge script in __init__.py does it inside the website, for any site).
+  const chromeShown = new Map();
+  function syncChrome() {
+    const grid = root.classList.contains("bd-break") && slots.length > 1;
+    for (const s of slots) {
+      if ((s.kind !== "page" && s.kind !== "youtube") || !s.media || !s.media.contentWindow) continue;
+      const show = !(grid && zoomed !== s.url);
+      if (show && (!chromeShown.has(s.media) || chromeShown.get(s.media) === true)) continue;  // already showing
+      chromeShown.set(s.media, show);
+      try { s.media.contentWindow.postMessage({ bdBridge: "chrome", show }, "*"); } catch (_) {}
+    }
   }
 
   // Press a tile: a plain click fills the screen with it; moving it a little picks it up, and letting go over another
@@ -1980,7 +2003,11 @@ window.backdrop = (() => {
   }
   function endTileDrag() {
     if (!tileDrag) return;
-    if (tileDrag.slot.el) tileDrag.slot.el.classList.remove("bd-lifted");
+    if (tileDrag.slot.el) {
+      tileDrag.slot.el.classList.remove("bd-lifted");
+      tileDrag.slot.el.style.transform = "";
+      tileDrag.slot.el.style.transformOrigin = "";
+    }
     if (layer) layer.classList.remove("bd-dragging");
     markDrop(null);
     tileDrag = null;
@@ -1989,7 +2016,8 @@ window.backdrop = (() => {
     if (e.button !== 0) return;
     e.preventDefault();
     try { hit.setPointerCapture(e.pointerId); } catch (_) {}
-    tileDrag = { slot: s, x: e.clientX, y: e.clientY, moved: false, target: null };
+    const box = s.el.getBoundingClientRect();
+    tileDrag = { slot: s, x: e.clientX, y: e.clientY, ox: e.clientX - box.left, oy: e.clientY - box.top, moved: false, target: null };
     const move = (ev) => {
       if (!tileDrag) return;
       if (!tileDrag.moved && Math.hypot(ev.clientX - tileDrag.x, ev.clientY - tileDrag.y) < 6) return;
@@ -1997,8 +2025,11 @@ window.backdrop = (() => {
       if (!tileDrag.moved) {
         tileDrag.moved = true;
         s.el.classList.add("bd-lifted");
+        s.el.style.transformOrigin = `${tileDrag.ox}px ${tileDrag.oy}px`;  // it shrinks toward the mouse
         layer && layer.classList.add("bd-dragging");
       }
+      // A shrunken, see-through copy of the stream follows the mouse (the stream itself, moved: nothing reloads).
+      s.el.style.transform = `translate(${ev.clientX - tileDrag.x}px, ${ev.clientY - tileDrag.y}px) scale(0.42)`;
       tileDrag.target = tileAt(ev.clientX, ev.clientY, s) || null;
       markDrop(tileDrag.target);
     };

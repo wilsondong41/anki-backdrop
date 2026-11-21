@@ -1166,7 +1166,7 @@
 #bd-layer .bd-slot > .bd-hit { touch-action: none; }
 #bd-layer:not(.bd-dragging) .bd-slot > .bd-hit:hover { outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
 #bd-layer.bd-dragging, #bd-layer.bd-dragging .bd-hit { cursor: grabbing; }
-#bd-layer .bd-slot.bd-lifted { opacity: 0.55; }
+#bd-layer .bd-slot.bd-lifted { opacity: 0.6; z-index: 20; border-radius: 14px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55); outline: 3px solid rgba(255, 255, 255, 0.7); outline-offset: -3px; pointer-events: none; }
 #bd-layer .bd-slot > .bd-hit.bd-drop { outline: 4px solid #3b82f6; outline-offset: -4px; background: rgba(59, 130, 246, 0.18); }
 #bd-layer.bd-has-zoom > .bd-slot:not(.bd-zoom) { display: none; }
 #bd-layer.bd-has-zoom > .bd-slot.bd-zoom { grid-column: 1 / -1; grid-row: 1 / -1; }
@@ -1185,6 +1185,7 @@
 #bd-break-pill.bd-rest-done .bd-break-bar > span { background: #f59e0b; }
 /* Break: each tile's Pause/Play, and tucking away when the mouse rests (see wake() in backdrop.js). */
 #bd-break-pill .bd-pill-pause { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 5px 10px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.12); color: inherit; font: 600 12px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+#bd-break-pill .bd-pill-pause[hidden] { display: none; }
 #bd-break-pill .bd-pill-pause:hover { background: rgba(255, 255, 255, 0.22); }
 #bd-break-pill .bd-pill-pause svg,
 #bd-layer .bd-tile-hold svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1197,6 +1198,7 @@
 #bd-layer.bd-dragging .bd-tile-hold { pointer-events: none; }
 /* Resting: the bar shrinks to its timer (and the draining line), faded. It stays full once the break is over. */
 #bd-break-pill { transition: opacity 0.3s, padding 0.2s; }
+#bd-break-pill .bd-break-text, #bd-break-pill .bd-back { white-space: nowrap; }
 :root.bd-idle #bd-break-pill:not(.bd-rest-done) { opacity: 0.55; padding: 5px 12px; }
 :root.bd-idle #bd-break-pill:not(.bd-rest-done) .bd-break-len,
 :root.bd-idle #bd-break-pill:not(.bd-rest-done) .bd-pill-pause,

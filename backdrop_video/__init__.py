@@ -709,7 +709,8 @@ def on_js_message(handled, message, context):
                     _retried[slot_url] = time.time()
                     go_live(slot_url)
                 else:
-                    tooltip("The live stream stopped. It may have ended.", period=6000)
+                    tooltip(f"This video stopped loading. It may have ended, or {_site(slot_url)} may be blocking it. "
+                            "Try again later, or another link.", period=7000)
         elif code == "video":
             # Anki's browser lacks H.264, which most .mp4 files use; fall back once through mpv -> WebM before giving up.
             if slot_url and not live.ready(slot_url) and slot_url not in _not_live:
@@ -2347,12 +2348,51 @@ BRIDGE_JS = r"""
     }
     return best;
   };
+  // Break grid with 2+ videos: show only the video, on top of the website's own title, buttons and pause screens
+  // (any site). It is lifted out of the page with a style the site can't override; the page is put back as it was
+  // when the video is focused, so its own controls work there. A frame without a video lifts its largest frame,
+  // where the video is.
+  const MARK = "data-bd-solo", UP = "data-bd-solo-up";
+  const css = `[${MARK}]{position:fixed!important;inset:0!important;top:0!important;left:0!important;width:100vw!important;
+    height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;transform:none!important;
+    z-index:2147483647!important;object-fit:contain!important;background:#000!important;visibility:visible!important;opacity:1!important}
+    [${UP}]{z-index:2147483647!important;transform:none!important;filter:none!important;contain:none!important;
+    will-change:auto!important;opacity:1!important;visibility:visible!important}`;
+  const largestFrame = () => {
+    let best = null, area = 0;
+    for (const f of document.querySelectorAll("iframe")) {
+      const r = f.getBoundingClientRect(), a = r.width * r.height;
+      if (a > area) { best = f; area = a; }
+    }
+    return area > 2000 ? best : null;
+  };
+  const unmark = () => {
+    for (const el of document.querySelectorAll(`[${MARK}],[${UP}]`)) { el.removeAttribute(MARK); el.removeAttribute(UP); }
+  };
+  const solo = (on) => {
+    const st = document.getElementById("bd-solo-style");
+    if (!on) { unmark(); if (st) st.remove(); return; }
+    const el = pick() || largestFrame();
+    if (!el) return;  // not loaded yet: the page asks again every second
+    if (!el.hasAttribute(MARK)) {
+      unmark();
+      el.setAttribute(MARK, "");
+      for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) a.setAttribute(UP, "");
+    }
+    if (!st) {
+      const s = document.createElement("style");
+      s.id = "bd-solo-style";
+      s.textContent = css;
+      (document.head || document.documentElement).appendChild(s);
+    }
+  };
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (!m || typeof m !== "object" || typeof m.bdBridge !== "string" || m.bdBridge === "status") return;
     for (const f of document.querySelectorAll("iframe")) {
       try { f.contentWindow && f.contentWindow.postMessage(m, "*"); } catch (_) {}
     }
+    if (m.bdBridge === "chrome") return solo(!m.show);
     const v = pick();
     if (!v) return;
     if (m.bdBridge === "seek" && isFinite(m.t) && isFinite(v.duration)) {
